@@ -56,6 +56,10 @@ slot array; declarations emitted outside those wrappers cannot implicitly
 capture the references. Existing names cannot be redeclared or change type.
 Each specialization registers a C-ABI destructor with the session, which
 destroys values in reverse declaration order before ORC is torn down.
+Resolved persistent types may contain only static origins. The parser rejects
+local and untracked borrowed values before compilation because the opaque slot
+ABI cannot preserve or validate their source lifetimes; users must persist an
+owned copy instead.
 
 Variable effects are sequential rather than transactional. Existing mutations
 completed before an uncaught `Error` remain visible, while variables declared
@@ -89,6 +93,43 @@ Modular's accelerator plugins, then precompiles the resulting `std`. The
 environment computes its runfiles import path and stages the runtime libraries
 without requiring an installed Mojo toolchain.
 
+## Official GPU launcher experiment
+
+The open-source compiler can compile MAX host APIs when the session has a
+`targetAccelerator`, but it cannot emit Apple's closed `air64` backend. The GPU
+experiment therefore keeps interactive host compilation in source-built xmojo
+and builds only the offloaded launcher with the official compiler. A pinned
+`max-core` Pixi environment supplies a matching compiler, stdlib, accelerator
+plugin, and `libmax`; `official_mojo_shared_library` verifies the exact compiler
+version before producing the shared library.
+
+The exported launcher receives borrowed pointers to the session's real
+`DeviceContext` and `DeviceBuffer`, enqueues its embedded Metal kernel, and
+synchronizes. The library remains loaded for the session lifetime. ORC's cell
+JITDylib has a current-process symbol generator, so generated host code can
+resolve both the launcher's exported C ABI and runtime symbols already loaded
+in the process.
+
+Only the official-compiler action runs locally outside Bazel's sandbox: the
+compiler installation is an intentionally local development toolchain. Its
+Mojo source and imported MAX sources remain declared action inputs, and Metal's
+toolchain environment is scoped to that action rather than invalidating every
+C++ action key. The C++ test itself remains normally sandboxed. Modular's
+global test defaults disable the allocator while requiring allocator-only
+mode, so the test applies Modular's own macOS convention of allowing direct
+Metal allocation.
+
+On macOS with Pixi and Xcode's Metal toolchain installed
+(`xcodebuild -downloadComponent MetalToolchain`):
+
+```bash
+./bazelw2 test @xmojo//:gpu_shared_library_test
+```
+
+This proves repeated GPU dispatch and readback through one persistent session.
+It does not yet compile kernels submitted in notebook cells; users must provide
+officially compiled launchers ahead of time.
+
 `tools/install_cli.sh` uses Bazel's `--script_path` to install lightweight
 launchers rather than copying the binaries without their runtime environment.
 The launchers execute the current Bazel outputs directly and therefore need to
@@ -121,12 +162,15 @@ not modeled.
 
 Completion and inspection use a second `MojoParserContext` containing replayed
 committed cells. This keeps speculative editor requests out of executable ORC
-state. Completion calls `codeCompleteREPLExpression`; inspection collects the
-compiler's resolved references and renders `PublicDecl` Markdown. Completeness
-uses Mojo's lexer for delimiters and lexical errors, then recognizes trailing
-suite colons and operators to supply notebook indentation. The session API uses
-UTF-8 byte offsets, as Modular's compiler does; `MojoInterpreter` translates
-these to and from Jupyter's Unicode-character offsets.
+state. Completion calls `codeCompleteREPLExpression`; inspection first collects
+the compiler's resolved references and renders `PublicDecl` Markdown. Persistent
+variables are synthetic wrapper parameters rather than renderable declarations,
+so their fallback remains compiler-driven: roots use their resolved
+`MojoASTTypeRef`, and members use an exact documented REPL-completion result.
+Completeness uses Mojo's lexer for delimiters and lexical errors, then recognizes
+trailing suite colons and operators to supply notebook indentation. The session
+API uses UTF-8 byte offsets, as Modular's compiler does; `MojoInterpreter`
+translates these to and from Jupyter's Unicode-character offsets.
 
 ## Jupyter frontend
 
@@ -163,6 +207,13 @@ Jupyter defaults: `none` and `hmac-sha256`. Other schemes fail explicitly.
   interruption only with its real backend.
 - Local sibling worktrees are authoritative during development. CI may check
   out recorded known-good commits for reproduction.
+
+`bazelw` and `bazelw2` use separate default output bases named `xmojo-1` and
+`xmojo-2`. This gives concurrent development sessions independent Bazel
+servers and analysis caches. Both inherit Modular's shared disk cache at
+`~/.cache/bazel-disk-cache`, so identical SPIR-V-enabled actions reuse compiled
+outputs across the two bases. `XMOJO_BAZEL_OUTPUT_BASE` overrides the first;
+`XMOJO_BAZELW2_OUTPUT_BASE` overrides the second.
 
 ## Tested dependency revisions
 

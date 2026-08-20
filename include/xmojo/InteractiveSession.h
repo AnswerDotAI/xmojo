@@ -94,6 +94,7 @@ struct CompletenessResult {
 
 struct SessionOptions {
   std::vector<std::string> importPaths;
+  std::string targetAccelerator;
   OutputCallback output;
   DisplayCallback display;
 };

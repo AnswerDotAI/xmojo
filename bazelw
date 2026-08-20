@@ -4,10 +4,17 @@ set -euo pipefail
 
 script_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 modular_root="$script_root/../modular"
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  default_output_base="$HOME/Library/Caches/bazel/xmojo-1"
+else
+  default_output_base="${XDG_CACHE_HOME:-$HOME/.cache}/bazel/xmojo-1"
+fi
+output_base="${XMOJO_BAZEL_OUTPUT_BASE:-$default_output_base}"
+startup_args=("--output_base=$output_base")
 cd "$modular_root"
 
 if [[ $# -eq 0 ]]; then
-  exec "$modular_root/bazelw"
+  exec "$modular_root/bazelw" "${startup_args[@]}"
 fi
 
 command="$1"
@@ -17,17 +24,21 @@ case "$command" in
 build | run | test)
   for target in "$@"; do
     case "$target" in
+    @xmojo//:gpu_launcher | @xmojo//:gpu_shared_library_test)
+      pixi install --manifest-path "$script_root/pixi.toml"
+      ;;
     @xmojo//*)
       "$script_root/tools/build_xeus_deps.sh"
       break
       ;;
     esac
   done
-  exec "$modular_root/bazelw" "$command" --config=build-mojo \
+  exec "$modular_root/bazelw" "${startup_args[@]}" "$command" --config=build-mojo \
     --check_visibility=false \
+    --extra_toolchains=@xmojo//bazel:official_mojo_toolchain \
     --inject_repository="xmojo=$script_root" "$@"
   ;;
 *)
-  exec "$modular_root/bazelw" "$command" "$@"
+  exec "$modular_root/bazelw" "${startup_args[@]}" "$command" "$@"
   ;;
 esac

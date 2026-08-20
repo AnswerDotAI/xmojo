@@ -1,3 +1,5 @@
+pixi.lock
 /bazel-*
 /.xmojo-deps/
+/.pixi/
 /tags

@@ -315,7 +315,11 @@ var x = 1
 var y = 1
 var owned = String("kept")
 var tracked = Tracked("value")
-print(x, y, owned)
+var rich = RichValue(12)
+var multiline = String(
+  "multi"
+)
+print(x, y, owned, multiline)
 )"));
 
   auto variableCompletion = session->complete("own", 3);
@@ -325,13 +329,66 @@ print(x, y, owned)
   ASSERT_NE(ownedCompletion, variableCompletion.items.end());
   EXPECT_EQ(ownedCompletion->kind, xmojo::CompletionKind::Variable);
 
+  auto persistentMemberCompletion = session->complete("owned.by", 8);
+  EXPECT_NE(std::find_if(
+                persistentMemberCompletion.items.begin(),
+                persistentMemberCompletion.items.end(),
+                [](const auto &item) { return item.label == "byte_length"; }),
+            persistentMemberCompletion.items.end());
+
+  auto variableInspection = session->inspect("owned", 3);
+  ASSERT_TRUE(variableInspection.found);
+  EXPECT_NE(variableInspection.markdown.find("var owned: String"),
+            std::string::npos);
+
+  auto persistentMemberInspection =
+      session->inspect("owned.byte_length()", 10);
+  ASSERT_TRUE(persistentMemberInspection.found);
+  EXPECT_NE(persistentMemberInspection.markdown.find("byte_length"),
+            std::string::npos);
+
+  size_t displayCount = output.displays.size();
+  ASSERT_TRUE(executionSucceeds(*session, "rich\n"));
+  ASSERT_EQ(output.displays.size(), displayCount + 1);
+  EXPECT_EQ(output.displays.back().kind, DisplayKind::ExecuteResult);
+  ASSERT_EQ(output.displays.back().data.size(), 3u);
+  EXPECT_EQ(output.displays.back().data[0].mimeType, "text/html");
+  EXPECT_EQ(output.displays.back().data[0].data, "<b>12</b>");
+
+  ASSERT_TRUE(executionSucceeds(*session, "owned += String(\"!\")\n"));
+  ASSERT_TRUE(executionSucceeds(*session, "print(owned)\n"));
+
   ASSERT_TRUE(runtimeFailsWith(*session, R"(
 x += 1
 raise Error("mutation completed")
 )",
                                "mutation completed"));
   ASSERT_TRUE(executionSucceeds(*session, "print(x, y)\n"));
-  EXPECT_EQ(output.standardOutput, "1 1 kept\n2 1\n");
+  EXPECT_EQ(output.standardOutput, "1 1 kept multi\nkept!\n2 1\n");
+
+  ASSERT_TRUE(
+      executionSucceeds(*session, "var owner = String(\"borrowed\")\n"));
+  EXPECT_TRUE(executionFailsWith(*session, "var view = StringSlice(owner)\n",
+                                 "cannot persist borrowed value"));
+  ASSERT_TRUE(
+      executionSucceeds(*session, "var copied = String(StringSlice(owner))\n"));
+  ASSERT_TRUE(executionSucceeds(*session, "print(copied)\n"));
+  ASSERT_TRUE(executionSucceeds(
+      *session, "var static_view: StaticString = \"static\"\n"));
+  ASSERT_TRUE(executionSucceeds(*session, "print(static_view)\n"));
+
+  EXPECT_TRUE(executionFailsWith(*session, R"(
+var same_cell_owner = String("local")
+var same_cell_view = StringSlice(same_cell_owner)
+)",
+                                 "cannot persist borrowed value"));
+
+  ASSERT_TRUE(executionSucceeds(*session, R"(
+if True:
+  var nested = 7
+  print(nested)
+)"));
+  EXPECT_TRUE(executionFailsWith(*session, "print(nested)\n", "nested"));
 
   EXPECT_TRUE(
       executionFailsWith(*session, "x = String(\"wrong\")\n", "String"));
@@ -352,7 +409,84 @@ raise Error("new variable failed")
   EXPECT_TRUE(executionFailsWith(*session, "print(lost)\n", "lost"));
 
   session.reset();
-  EXPECT_EQ(output.standardOutput, "1 1 kept\n2 1\ndestroyed value\n");
+  EXPECT_EQ(
+      output.standardOutput,
+      "1 1 kept multi\nkept!\n2 1\nborrowed\nstatic\n7\ndestroyed value\n");
+}
+
+TEST(InteractiveSessionTest, PreventsConsumingPersistentStorage) {
+  auto session = createSession();
+  ASSERT_NE(session, nullptr);
+
+  ASSERT_TRUE(executionSucceeds(*session, R"(
+struct MoveOnly(Movable):
+  var value: Int
+
+  def __init__(out self, value: Int):
+    self.value = value
+
+def consume_move_only(var value: MoveOnly):
+  pass
+
+var movable = MoveOnly(5)
+)"));
+  EXPECT_TRUE(executionFailsWith(*session, "consume_move_only(movable^)\n",
+                                 "does not designate a value with an origin"));
+}
+
+TEST(InteractiveSessionTest, CompletesSeveralPersistentUserTypes) {
+  auto session = createSession();
+  ASSERT_NE(session, nullptr);
+
+  ASSERT_TRUE(executionSucceeds(*session, R"(
+struct First(Movable):
+  var value: String
+
+  def __init__(out self, value: String):
+    self.value = value
+)"));
+  auto initialCompletion = session->complete("Fir", 3);
+  EXPECT_NE(std::find_if(
+                initialCompletion.items.begin(), initialCompletion.items.end(),
+                [](const auto &item) { return item.label == "First"; }),
+            initialCompletion.items.end());
+
+  ASSERT_TRUE(executionSucceeds(*session, R"(
+struct Second(Movable):
+  var value: Int
+
+  def __init__(out self, value: Int):
+    self.value = value
+
+def consume_second(var value: Second):
+  pass
+
+var first = First("one")
+var second = Second(2)
+var owned = String("value")
+)"));
+
+  auto completion = session->complete("own", 3);
+  EXPECT_NE(
+      std::find_if(completion.items.begin(), completion.items.end(),
+                   [](const auto &item) { return item.label == "owned"; }),
+      completion.items.end());
+
+  auto memberCompletion = session->complete("owned.by", 8);
+  auto byteLength = std::find_if(
+      memberCompletion.items.begin(), memberCompletion.items.end(),
+      [](const auto &item) { return item.label == "byte_length"; });
+  ASSERT_NE(byteLength, memberCompletion.items.end());
+  EXPECT_FALSE(byteLength->documentation.empty());
+}
+
+TEST(InteractiveSessionTest, RejectsPersistentBorrowedTemporary) {
+  auto session = createSession();
+  ASSERT_NE(session, nullptr);
+
+  EXPECT_TRUE(executionFailsWith(
+      *session, "var dangling = StringSlice(String(\"temporary\"))\n",
+      "cannot persist borrowed value"));
 }
 
 TEST(InteractiveSessionTest, IsolatesSessions) {
