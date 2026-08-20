@@ -72,6 +72,7 @@ struct CompletionItem {
   std::string label;
   std::string documentation;
   CompletionKind kind = CompletionKind::Unknown;
+  std::string signature;
 };
 
 struct CompletionResult {

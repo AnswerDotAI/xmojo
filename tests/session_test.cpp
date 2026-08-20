@@ -328,6 +328,9 @@ print(x, y, owned, multiline)
       [](const auto &item) { return item.label == "owned"; });
   ASSERT_NE(ownedCompletion, variableCompletion.items.end());
   EXPECT_EQ(ownedCompletion->kind, xmojo::CompletionKind::Variable);
+  EXPECT_EQ(ownedCompletion->signature, "var owned: String");
+  EXPECT_NE(ownedCompletion->documentation.find("var owned: String"),
+            std::string::npos);
 
   auto persistentMemberCompletion = session->complete("owned.by", 8);
   EXPECT_NE(std::find_if(

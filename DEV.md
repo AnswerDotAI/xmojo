@@ -167,6 +167,8 @@ the compiler's resolved references and renders `PublicDecl` Markdown. Persistent
 variables are synthetic wrapper parameters rather than renderable declarations,
 so their fallback remains compiler-driven: roots use their resolved
 `MojoASTTypeRef`, and members use an exact documented REPL-completion result.
+Persistent root completions expose the same compiler-rendered declaration as
+their Jupyter completion signature.
 Completeness uses Mojo's lexer for delimiters and lexical errors, then recognizes
 trailing suite colons and operators to supply notebook indentation. The session
 API uses UTF-8 byte offsets, as Modular's compiler does; `MojoInterpreter`

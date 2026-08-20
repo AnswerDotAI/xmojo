@@ -86,6 +86,7 @@ TEST(MojoInterpreterTest, RunsAJupyterExecutionStory) {
 def answer() -> Int:
   return 42
 
+var owned = String("kept")
 print("ready")
 )")["status"],
             "ok");
@@ -98,6 +99,15 @@ print("ready")
                       completion["matches"].end(), "answer"),
             completion["matches"].end());
   EXPECT_TRUE(completion["metadata"].contains("_jupyter_types_experimental"));
+
+  completion = story.complete("own", 3);
+  const auto &details =
+      completion["metadata"]["_jupyter_types_experimental"];
+  auto ownedCompletion = std::find_if(
+      details.begin(), details.end(),
+      [](const auto &item) { return item["text"] == "owned"; });
+  ASSERT_NE(ownedCompletion, details.end());
+  EXPECT_EQ((*ownedCompletion)["signature"], "var owned: String");
 
   completion = story.complete("# é\nans", 7);
   EXPECT_EQ(completion["cursor_start"], 4);
