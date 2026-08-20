@@ -1,2 +1,3 @@
 /bazel-*
+/.xmojo-deps/
 /tags

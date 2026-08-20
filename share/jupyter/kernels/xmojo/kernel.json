@@ -1,0 +1,8 @@
+{
+  "argv": ["xmojo", "-f", "{connection_file}"],
+  "display_name": "Mojo (xmojo)",
+  "language": "mojo",
+  "metadata": {
+    "debugger": false
+  }
+}

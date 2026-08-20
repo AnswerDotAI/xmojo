@@ -15,6 +15,14 @@ shift
 
 case "$command" in
 build | run | test)
+  for target in "$@"; do
+    case "$target" in
+    @xmojo//*)
+      "$script_root/tools/build_xeus_deps.sh"
+      break
+      ;;
+    esac
+  done
   exec "$modular_root/bazelw" "$command" --config=build-mojo \
     --check_visibility=false \
     --inject_repository="xmojo=$script_root" "$@"

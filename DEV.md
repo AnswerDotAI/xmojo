@@ -14,7 +14,7 @@ InteractiveSession
 ├── ORC object compilation and execution
 ├── xmojo stdlib overlay and scoped output callbacks
 ├── mojoorc terminal frontend
-└── MojoInterpreter xeus frontend (future)
+└── MojoInterpreter and xeus-zmq Jupyter frontend
 ```
 
 The public boundary is direct C++. There is no subprocess protocol or public C
@@ -66,6 +66,23 @@ buffer stack storage per active print call rather than permanent process
 storage. Direct `FileDescriptor.write_*` calls and GPU output remain outside
 the current boundary.
 
+## Jupyter frontend
+
+`MojoInterpreter` is a thin translation layer between xeus requests and
+`InteractiveSession`; it owns no compiler state. The `xmojo` executable adds
+xeus-zmq's sockets and Jupyter connection-file handling. Its end-to-end test
+launches that executable directly by argv through `conkernelclient`, without
+installing or discovering a kernelspec. `conkernelclient` provides correlated
+shell replies, deterministic readiness, IOPub draining, and process cleanup.
+The test checks persistent cells, stdout, stderr, and errors over the wire.
+
+The xeus, xeus-zmq, libzmq, cppzmq, and nlohmann-json sibling worktrees remain
+unchanged; CMake stages their static libraries in the ignored `.xmojo-deps`
+directory. xeus-zmq normally uses OpenSSL algorithms which Modular's BoringSSL
+does not provide. Rather than linking two crypto implementations, the build
+substitutes an xmojo-owned authentication implementation supporting the
+Jupyter defaults: `none` and `hmac-sha256`. Other schemes fail explicitly.
+
 ## Design constraints
 
 - Keep the Modular checkout free of xmojo patches.
@@ -86,23 +103,21 @@ the current boundary.
 
 ## Tested dependency revisions
 
-The current compiler PoC is tested against:
+The current compiler and kernel PoC is tested against:
 
 ```text
 modular  4c1ccb5532596d3b6255ce729b6ce04b328e1828
+nlohmann-json 55f93686c01528224f448c19128836e7df245f72
 xeus     69d6d1397c68ba0ac1f6ab766dbeebb8a81e5b03
 xeus-zmq 660e6c6ca75badbe55b295cec8c8dd020a5540f0
 libzmq   46493370217ac135246617fa2f6ac819d8b61bfc
 cppzmq   7f0530688804c2b5b6b0d985773405593fd25ca8
 ```
 
-Only Modular participates in the current build. The remaining revisions record
-the sibling sources prepared for the later xeus integration.
-
 When updating Modular, replace the recorded revision rather than supporting
 both old and new APIs, then run:
 
 ```bash
-./bazelw test @xmojo//:session_test
-./bazelw build @xmojo//:mojoorc
+./bazelw test @xmojo//:session_test @xmojo//:interpreter_test @xmojo//:kernel_test
+./bazelw build @xmojo//:mojoorc @xmojo//:xmojo
 ```

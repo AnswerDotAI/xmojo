@@ -6,8 +6,10 @@ load(
     "mojo_test_environment",
 )
 load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
+load("@rules_cc//cc:cc_import.bzl", "cc_import")
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
 load("@rules_cc//cc:cc_test.bzl", "cc_test")
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
 
 mojo_overlay_layer(
     name = "modular_stdlib_sources",
@@ -40,6 +42,55 @@ mojo_library(
 mojo_test_environment(
     name = "stdlib_environment",
     data = [":std"],
+)
+
+cc_import(
+    name = "xeus_archive",
+    static_library = ".xmojo-deps/install/lib/libxeus.a",
+)
+
+cc_import(
+    name = "xeus_zmq_archive",
+    static_library = ".xmojo-deps/install/lib/libxeus-zmq.a",
+)
+
+cc_import(
+    name = "zmq_archive",
+    static_library = ".xmojo-deps/install/lib/libzmq.a",
+)
+
+cc_library(
+    name = "xeus",
+    hdrs = glob([
+        ".xmojo-deps/install/include/nlohmann/**/*.hpp",
+        ".xmojo-deps/install/include/xeus/**/*.hpp",
+    ]),
+    defines = ["XEUS_STATIC_LIB"],
+    includes = [".xmojo-deps/install/include"],
+    linkopts = select({
+        "@platforms//os:macos": ["-framework CoreFoundation"],
+        "//conditions:default": [],
+    }),
+    deps = [":xeus_archive"],
+)
+
+cc_library(
+    name = "xeus_zmq",
+    hdrs = glob([
+        ".xmojo-deps/install/include/xeus-zmq/**/*.hpp",
+        ".xmojo-deps/install/include/zmq*.h",
+        ".xmojo-deps/install/include/zmq*.hpp",
+    ]),
+    defines = [
+        "XEUS_ZMQ_STATIC_LIB",
+        "ZMQ_STATIC",
+    ],
+    includes = [".xmojo-deps/install/include"],
+    deps = [
+        ":xeus",
+        ":xeus_zmq_archive",
+        ":zmq_archive",
+    ],
 )
 
 cc_library(
@@ -84,6 +135,39 @@ cc_binary(
     deps = [":interactive_session"],
 )
 
+cc_library(
+    name = "mojo_interpreter",
+    srcs = ["src/kernel/MojoInterpreter.cpp"],
+    hdrs = ["src/kernel/MojoInterpreter.h"],
+    deps = [
+        ":interactive_session",
+        ":xeus",
+    ],
+)
+
+cc_binary(
+    name = "xmojo",
+    srcs = ["src/xmojo.cpp"],
+    data = [
+        ":kernelspec",
+        ":stdlib_environment",
+    ],
+    env = {
+        "MODULAR_CRASH_REPORTING_ENABLED": "0",
+        "MODULAR_MOJO_MAX_IMPORT_PATH": "$(COMPUTED_IMPORT_PATH)",
+    },
+    toolchains = [":stdlib_environment"],
+    deps = [
+        ":mojo_interpreter",
+        ":xeus_zmq",
+    ],
+)
+
+filegroup(
+    name = "kernelspec",
+    srcs = ["share/jupyter/kernels/xmojo/kernel.json"],
+)
+
 cc_test(
     name = "session_test",
     srcs = ["tests/session_test.cpp"],
@@ -100,4 +184,38 @@ cc_test(
         "@platforms//os:macos": ["@//bazel/internal:gtest_main_objc_pool_check"],
         "//conditions:default": ["@llvm-project//third-party/unittest:gtest_main"],
     }),
+)
+
+cc_test(
+    name = "interpreter_test",
+    srcs = ["tests/interpreter_test.cpp"],
+    data = [":stdlib_environment"],
+    env = {
+        "MODULAR_CRASH_REPORTING_ENABLED": "0",
+        "MODULAR_MOJO_MAX_IMPORT_PATH": "$(COMPUTED_IMPORT_PATH)",
+    },
+    toolchains = [":stdlib_environment"],
+    deps = [
+        ":mojo_interpreter",
+        "@llvm-project//third-party/unittest:gtest",
+    ] + select({
+        "@platforms//os:macos": ["@//bazel/internal:gtest_main_objc_pool_check"],
+        "//conditions:default": ["@llvm-project//third-party/unittest:gtest_main"],
+    }),
+)
+
+sh_test(
+    name = "kernel_test",
+    srcs = ["tests/kernel_test.py"],
+    args = ["$(rootpath :xmojo)"],
+    data = [
+        ":stdlib_environment",
+        ":xmojo",
+    ],
+    env = {
+        "MODULAR_CRASH_REPORTING_ENABLED": "0",
+        "MODULAR_MOJO_MAX_IMPORT_PATH": "$(COMPUTED_IMPORT_PATH)",
+    },
+    env_inherit = ["PATH"],
+    toolchains = [":stdlib_environment"],
 )
