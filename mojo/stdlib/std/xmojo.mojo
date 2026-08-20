@@ -126,3 +126,24 @@ def __xmojo_display[T: AnyType](value: T):
 def __xmojo_display(value: None):
     """Suppress the result of an expression returning `None`."""
     pass
+
+
+def __xmojo_error(error: Error):
+    """Route an uncaught cell error to its interactive session."""
+    var message = String(error)
+    var stack_trace = error.get_stack_trace()
+    if stack_trace:
+        var trace = String(stack_trace.value())
+        external_call["xmojo_emit_error", NoneType](
+            message.as_bytes().unsafe_ptr(),
+            c_size_t(message.byte_length()),
+            trace.as_bytes().unsafe_ptr(),
+            c_size_t(trace.byte_length()),
+        )
+    else:
+        external_call["xmojo_emit_error", NoneType](
+            message.as_bytes().unsafe_ptr(),
+            c_size_t(message.byte_length()),
+            "".ptr(),
+            c_size_t(0),
+        )

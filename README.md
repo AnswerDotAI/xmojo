@@ -71,11 +71,15 @@ The current compiler and kernel PoC:
 - parses executable statements and top-level declarations in one cell;
 - resolves later cells against explicitly committed declaration history;
 - commits no history from a cell that fails parsing or compilation;
+- retains compiled declarations from a cell whose executable statements raise;
+- reports uncaught Mojo errors, including an available stack trace, as failed
+  execution rather than printed output;
 - maps diagnostics from generated wrappers back to the submitted source;
 - executes uniquely named cell entry points in one ORC JITDylib;
 - streams CPU `print()` output through per-session stdout/stderr callbacks;
 - uses a 128 KiB formatting buffer for each active CPU print call;
 - keeps simultaneous sessions isolated;
+- isolates each session's compiler object cache;
 - displays the final value expression as a Jupyter `execute_result`;
 - publishes explicit textual MIME bundles with `display()` and Mojo repr
   traits;

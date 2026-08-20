@@ -119,6 +119,7 @@ cc_library(
         "@//KGEN:ToolCommon",
         "@//KGEN:TransformUtils",
         "@//Support:Context",
+        "@//Support:Filesystem",
         "@//Support:MDialect",
         "@llvm-project//llvm:OrcJIT",
         "@llvm-project//llvm:Support",

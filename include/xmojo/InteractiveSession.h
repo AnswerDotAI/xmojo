@@ -12,6 +12,7 @@
 #include "llvm/ADT/StringRef.h"
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -45,9 +46,15 @@ struct Diagnostic {
   std::string message;
 };
 
+struct RuntimeError {
+  std::string message;
+  std::string stackTrace;
+};
+
 struct ExecutionResult {
   bool succeeded = false;
   std::vector<Diagnostic> diagnostics;
+  std::optional<RuntimeError> runtimeError;
 };
 
 enum class CompletionKind {
@@ -93,10 +100,11 @@ struct SessionOptions {
 
 /// A persistent, in-process Mojo compilation and execution session.
 ///
-/// Each successfully compiled cell contributes declarations to subsequent
-/// cells and remains loaded in a shared ORC execution engine. User compilation
-/// failures are returned as ExecutionResult values; failures to construct or
-/// operate the compiler itself are returned as Error values.
+/// Each successfully loaded cell contributes declarations to subsequent cells
+/// and remains in a shared ORC execution engine, even if its execution raises.
+/// User compilation and runtime failures are returned as ExecutionResult
+/// values; failures to construct or safely continue operating the compiler are
+/// returned as Error values.
 class InteractiveSession {
 public:
   static M::ErrorOr<std::unique_ptr<InteractiveSession>>

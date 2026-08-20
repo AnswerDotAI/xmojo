@@ -97,8 +97,7 @@ print("ready")
   EXPECT_NE(std::find(completion["matches"].begin(),
                       completion["matches"].end(), "answer"),
             completion["matches"].end());
-  EXPECT_TRUE(completion["metadata"].contains(
-      "_jupyter_types_experimental"));
+  EXPECT_TRUE(completion["metadata"].contains("_jupyter_types_experimental"));
 
   completion = story.complete("# é\nans", 7);
   EXPECT_EQ(completion["cursor_start"], 4);
@@ -110,10 +109,9 @@ print("ready")
   nl::json inspection = story.inspect("# é\nanswer()", 7);
   EXPECT_EQ(inspection["status"], "ok");
   EXPECT_TRUE(inspection["found"]);
-  EXPECT_NE(inspection["data"]["text/markdown"]
-                .get<std::string>()
-                .find("def answer"),
-            std::string::npos);
+  EXPECT_NE(
+      inspection["data"]["text/markdown"].get<std::string>().find("def answer"),
+      std::string::npos);
 
   EXPECT_EQ(story.isComplete("def unfinished() -> Int:\n")["status"],
             "incomplete");
@@ -140,7 +138,7 @@ struct HTML(HTMLRepr):
     return String("<i>", self.value, "</i>")
 
 display(HTML(7))
-)" )["status"],
+)")["status"],
             "ok");
   auto displays = story.messages("display_data");
   ASSERT_EQ(displays.size(), 1u);
@@ -167,6 +165,28 @@ print("warning", file=stderr)
   EXPECT_NE(story.published.back().content["evalue"].get<std::string>().find(
                 "unknown_name"),
             std::string::npos);
+
+  story.published.clear();
+  failure = story.execute(R"(
+def survives_raise() -> Int:
+  return 123
+
+print("before raise")
+raise Error("kaboom")
+)");
+  EXPECT_EQ(failure["status"], "error");
+  EXPECT_EQ(failure["ename"], "MojoError");
+  EXPECT_EQ(failure["evalue"], "kaboom");
+  EXPECT_EQ(story.stream("stdout"), "before raise\n");
+  ASSERT_FALSE(failure["traceback"].empty());
+  EXPECT_NE(failure["traceback"][0].get<std::string>().find("kaboom"),
+            std::string::npos);
+
+  story.published.clear();
+  EXPECT_EQ(story.execute("survives_raise()\n")["status"], "ok");
+  auto survivingResult = story.messages("execute_result");
+  ASSERT_EQ(survivingResult.size(), 1u);
+  EXPECT_EQ(survivingResult[0]->content["data"]["text/plain"], "Int(123)");
 
   story.published.clear();
   EXPECT_EQ(story.execute("print(99)\n", /*silent=*/true)["status"], "ok");

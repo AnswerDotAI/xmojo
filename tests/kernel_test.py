@@ -67,5 +67,21 @@ class KernelStory(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(errors), 1)
             self.assertIn("unknown_name", errors[0]["content"]["evalue"])
 
+            reply, published = await client.exec_drain(
+                'def survives_raise() -> Int:\n  return 123\n\nprint("before raise")\nraise Error("kaboom")\n',
+                timeout=60)
+            reply = reply["content"]
+            self.assertEqual(reply["status"], "error")
+            self.assertEqual(reply["ename"], "MojoError")
+            self.assertEqual(reply["evalue"], "kaboom")
+            self.assertEqual(self.stream(published, "stdout"), "before raise\n")
+            self.assertIn("kaboom", reply["traceback"][0])
+
+            reply, published = await client.exec_drain("survives_raise()\n", timeout=60)
+            self.assertEqual(reply["content"]["status"], "ok")
+            results = iopub_msgs(published, "execute_result")
+            self.assertEqual(len(results), 1)
+            self.assertEqual(results[0]["content"]["data"]["text/plain"], "Int(123)")
+
 
 if __name__ == "__main__": unittest.main(argv=sys.argv[:1])

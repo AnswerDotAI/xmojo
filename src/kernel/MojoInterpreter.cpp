@@ -121,6 +121,20 @@ void MojoInterpreter::execute_request_impl(send_reply_callback callback,
   }
 
   std::vector<std::string> messages = diagnosticMessages(*resultOr);
+  if (resultOr->runtimeError) {
+    const RuntimeError &error = *resultOr->runtimeError;
+    std::vector<std::string> traceback{"MojoError: " + error.message};
+    if (!error.stackTrace.empty())
+      traceback.push_back(error.stackTrace);
+    if (!config.silent) {
+      for (const std::string &diagnostic : messages)
+        publish_stream("stderr", diagnostic);
+      publish_execution_error("MojoError", error.message, traceback);
+    }
+    callback(xeus::create_error_reply("MojoError", error.message, traceback));
+    return;
+  }
+
   if (!resultOr->succeeded) {
     std::string message = joinMessages(messages);
     if (!config.silent)
@@ -152,8 +166,7 @@ nl::json MojoInterpreter::complete_request_impl(const std::string &code,
                         {"type", completionKindName(item.kind)},
                         {"signature", ""}});
   }
-  nl::json metadata = {
-      {"_jupyter_types_experimental", std::move(detailed)}};
+  nl::json metadata = {{"_jupyter_types_experimental", std::move(detailed)}};
   return xeus::create_complete_reply(matches, cursorStart, cursorEnd, metadata);
 }
 
