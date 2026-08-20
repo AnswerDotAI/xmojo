@@ -299,6 +299,60 @@ except error:
   EXPECT_EQ(output.standardOutput,
             "6\n42\n7\n8\n" + longText + "\nbefore raise\n123\ncaught\n42\n");
   EXPECT_EQ(output.standardError, "warning\n");
+
+  output.standardOutput.clear();
+  ASSERT_TRUE(executionSucceeds(*session, R"(
+struct Tracked(Movable):
+  var label: String
+
+  def __init__(out self, label: String):
+    self.label = label
+
+  def __deinit__(deinit self):
+    print("destroyed", self.label)
+
+var x = 1
+var y = 1
+var owned = String("kept")
+var tracked = Tracked("value")
+print(x, y, owned)
+)"));
+
+  auto variableCompletion = session->complete("own", 3);
+  auto ownedCompletion = std::find_if(
+      variableCompletion.items.begin(), variableCompletion.items.end(),
+      [](const auto &item) { return item.label == "owned"; });
+  ASSERT_NE(ownedCompletion, variableCompletion.items.end());
+  EXPECT_EQ(ownedCompletion->kind, xmojo::CompletionKind::Variable);
+
+  ASSERT_TRUE(runtimeFailsWith(*session, R"(
+x += 1
+raise Error("mutation completed")
+)",
+                               "mutation completed"));
+  ASSERT_TRUE(executionSucceeds(*session, "print(x, y)\n"));
+  EXPECT_EQ(output.standardOutput, "1 1 kept\n2 1\n");
+
+  EXPECT_TRUE(
+      executionFailsWith(*session, "x = String(\"wrong\")\n", "String"));
+  EXPECT_TRUE(executionFailsWith(*session, "var x = 3\n", "already declared"));
+  EXPECT_TRUE(executionFailsWith(*session, R"(
+def cannot_capture_x() -> Int:
+  return x
+
+print(cannot_capture_x())
+)",
+                                 "x"));
+
+  ASSERT_TRUE(runtimeFailsWith(*session, R"(
+var lost = 3
+raise Error("new variable failed")
+)",
+                               "new variable failed"));
+  EXPECT_TRUE(executionFailsWith(*session, "print(lost)\n", "lost"));
+
+  session.reset();
+  EXPECT_EQ(output.standardOutput, "1 1 kept\n2 1\ndestroyed value\n");
 }
 
 TEST(InteractiveSessionTest, IsolatesSessions) {

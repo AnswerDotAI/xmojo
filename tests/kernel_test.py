@@ -22,6 +22,9 @@ class KernelStory(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(reply["status"], "ok")
             self.assertEqual(self.stream(published, "stdout"), "ready\n")
 
+            reply, _ = await client.exec_drain("var x = 1\nvar y = 1\n", timeout=60)
+            self.assertEqual(reply["content"]["status"], "ok")
+
             completion = (await client.cmd.complete(code="ans", cursor_pos=3))["content"]
             self.assertEqual(completion["status"], "ok")
             self.assertIn("answer", completion["matches"])
@@ -68,7 +71,7 @@ class KernelStory(unittest.IsolatedAsyncioTestCase):
             self.assertIn("unknown_name", errors[0]["content"]["evalue"])
 
             reply, published = await client.exec_drain(
-                'def survives_raise() -> Int:\n  return 123\n\nprint("before raise")\nraise Error("kaboom")\n',
+                'def survives_raise() -> Int:\n  return 123\n\nx += 1\nprint("before raise")\nraise Error("kaboom")\n',
                 timeout=60)
             reply = reply["content"]
             self.assertEqual(reply["status"], "error")
@@ -76,6 +79,10 @@ class KernelStory(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(reply["evalue"], "kaboom")
             self.assertEqual(self.stream(published, "stdout"), "before raise\n")
             self.assertIn("kaboom", reply["traceback"][0])
+
+            reply, published = await client.exec_drain("print(x, y)\n", timeout=60)
+            self.assertEqual(reply["content"]["status"], "ok")
+            self.assertEqual(self.stream(published, "stdout"), "2 1\n")
 
             reply, published = await client.exec_drain("survives_raise()\n", timeout=60)
             self.assertEqual(reply["content"]["status"], "ok")

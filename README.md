@@ -72,6 +72,8 @@ The current compiler and kernel PoC:
 - resolves later cells against explicitly committed declaration history;
 - commits no history from a cell that fails parsing or compilation;
 - retains compiled declarations from a cell whose executable statements raise;
+- keeps successful top-level `var` declarations in typed, session-owned
+  storage so later cells can read and mutate them;
 - reports uncaught Mojo errors, including an available stack trace, as failed
   execution rather than printed output;
 - maps diagnostics from generated wrappers back to the submitted source;
@@ -90,9 +92,12 @@ The current compiler and kernel PoC:
   replies.
 
 It does not use Modular's LLDB-oriented REPL parser entry point, REPL context,
-or persistent-variable materializer. Persistent local values, typed expression
-history, binary rich-display buffers, display metadata, direct file-descriptor
-writes, interruption, and GPU execution are deliberately outside this PoC.
+or persistent-variable materializer. A persistent variable keeps its original
+type, cannot be redeclared, and is visible only to later cell statements—not
+implicitly inside function bodies. Mutations completed before a runtime error
+remain; new variables from the raising cell do not. Typed expression history,
+binary rich-display buffers, display metadata, direct file-descriptor writes,
+interruption, and GPU execution are deliberately outside this PoC.
 
 Notebook code can opt into rich display without Python-style runtime
 reflection:
