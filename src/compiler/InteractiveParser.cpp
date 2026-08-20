@@ -18,11 +18,18 @@
 #include "KGEN/MojoParser/ASTDecl.h"
 #include "KGEN/MojoParser/DeclResolver.h"
 #include "KGEN/MojoParser/EntryPoint.h"
+#include "KGEN/MojoParser/ExprNode.h"
+#include "KGEN/MojoParser/Lexer.h"
 #include "KGEN/MojoParser/SharedState.h"
 #include "KGEN/MojoTooling/ParserDriver.h"
+#include "KGEN/MojoTooling/CodeComplete.h"
+#include "KGEN/MojoTooling/PublicASTDecl.h"
+#include "KGEN/lib/MojoParser/ParserBase.h"
+#include "Support/Compiler/Diags.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "llvm/ADT/ScopeExit.h"
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/SourceMgr.h"
 
@@ -36,10 +43,20 @@ using llvm::SmallVector;
 using llvm::SmallVectorImpl;
 using llvm::StringRef;
 using M::KGEN::LIT::ASTDecl;
+using M::KGEN::LIT::ExprNode;
 using M::KGEN::LIT::FnOp;
+using M::KGEN::LIT::Lexer;
+using M::KGEN::LIT::LexerCursor;
+using M::KGEN::LIT::ParserBase;
 using M::KGEN::LIT::SharedState;
+using M::KGEN::LIT::Token;
 using mlir::FileLineColLoc;
 using mlir::MLIRContext;
+using xmojo::CompletionKind;
+using xmojo::CompletionResult;
+using xmojo::CompletenessResult;
+using xmojo::CompletenessStatus;
+using xmojo::InspectionResult;
 
 namespace {
 
@@ -239,10 +256,234 @@ struct WrappedCell {
   CellSourceMap map;
 };
 
-WrappedCell wrapCell(StringRef source, StringRef functionName) {
+struct TrailingExpression {
+  const char *start;
+  const char *end;
+};
+
+void updateBrackets(const Token &token, SmallVectorImpl<Token::Kind> &open) {
+  auto close = [&](Token::Kind expected) {
+    if (!open.empty() && open.back() == expected)
+      open.pop_back();
+    else
+      open.clear();
+  };
+  switch (token.getKind()) {
+  case Token::l_paren:
+  case Token::l_square:
+  case Token::l_brace:
+    open.push_back(token.getKind());
+    break;
+  case Token::r_paren:
+    close(Token::l_paren);
+    break;
+  case Token::r_square:
+    close(Token::l_square);
+    break;
+  case Token::r_brace:
+    close(Token::l_brace);
+    break;
+  default:
+    break;
+  }
+}
+
+std::optional<LexerCursor> findTrailingStatement(SharedState &state,
+                                                 const llvm::MemoryBuffer *buf) {
+  size_t baseIndent = std::numeric_limits<size_t>::max();
+  for (Lexer lexer(state.diags, buf); !lexer.getToken().is(Token::eof);
+       lexer.lexToken()) {
+    if (auto indent = lexer.getToken().getIndentation())
+      baseIndent = std::min(baseIndent, *indent);
+  }
+  if (baseIndent == std::numeric_limits<size_t>::max())
+    return std::nullopt;
+
+  std::optional<LexerCursor> trailing;
+  SmallVector<Token::Kind> openBrackets;
+  Lexer lexer(state.diags, buf);
+  while (!lexer.getToken().is(Token::eof)) {
+    const Token &token = lexer.getToken();
+    if (openBrackets.empty()) {
+      if (token.getIndentation() == baseIndent)
+        trailing = lexer.getCursor();
+      if (token.is(Token::semi)) {
+        lexer.lexToken();
+        if (!lexer.getToken().is(Token::eof) &&
+            !lexer.getToken().isStartOfLine())
+          trailing = lexer.getCursor();
+        continue;
+      }
+    }
+    updateBrackets(token, openBrackets);
+    lexer.lexToken();
+  }
+  return trailing;
+}
+
+bool requiresFollowingToken(Token::Kind kind) {
+  switch (kind) {
+  case Token::comma:
+  case Token::dot:
+  case Token::colon:
+  case Token::equal:
+  case Token::plus:
+  case Token::minus:
+  case Token::star:
+  case Token::star_star:
+  case Token::slash:
+  case Token::slash_slash:
+  case Token::percent:
+  case Token::at:
+  case Token::amp:
+  case Token::pipe:
+  case Token::caret:
+  case Token::less:
+  case Token::greater:
+  case Token::less_equal:
+  case Token::greater_equal:
+  case Token::equal_equal:
+  case Token::exclaim_equal:
+  case Token::plus_equal:
+  case Token::minus_equal:
+  case Token::star_equal:
+  case Token::slash_equal:
+  case Token::kw_and:
+  case Token::kw_or:
+  case Token::kw_not:
+    return true;
+  default:
+    return false;
+  }
+}
+
+CompletenessResult checkCompleteness(SharedState &state,
+                                     llvm::SourceMgr &sourceManager,
+                                     StringRef source) {
+  unsigned id = sourceManager.AddNewSourceBuffer(
+      llvm::MemoryBuffer::getMemBufferCopy(source, "Mojo completeness"),
+      llvm::SMLoc());
+  const llvm::MemoryBuffer *buffer = sourceManager.getMemoryBuffer(id);
+  auto oldHandler = sourceManager.getDiagHandler();
+  void *oldContext = sourceManager.getDiagContext();
+  sourceManager.setDiagHandler([](const llvm::SMDiagnostic &, void *) {},
+                               nullptr);
+  auto restoreHandler = llvm::scope_exit(
+      [&] { sourceManager.setDiagHandler(oldHandler, oldContext); });
+
+  SmallVector<Token::Kind> openBrackets;
+  Token::Kind lastKind = Token::eof;
+  size_t lineIndent = 0;
+  bool invalid = false;
+  bool lexicalError = false;
+  auto close = [&](Token::Kind expected) {
+    if (openBrackets.empty() || openBrackets.back() != expected) {
+      invalid = true;
+      return;
+    }
+    openBrackets.pop_back();
+  };
+  for (Lexer lexer(state.diags, buffer); !lexer.getToken().is(Token::eof);
+       lexer.lexToken()) {
+    const Token &token = lexer.getToken();
+    lastKind = token.getKind();
+    lexicalError |= token.is(Token::error);
+    if (auto indent = token.getIndentation())
+      lineIndent = *indent;
+    switch (token.getKind()) {
+    case Token::l_paren:
+    case Token::l_square:
+    case Token::l_brace:
+      openBrackets.push_back(token.getKind());
+      break;
+    case Token::r_paren:
+      close(Token::l_paren);
+      break;
+    case Token::r_square:
+      close(Token::l_square);
+      break;
+    case Token::r_brace:
+      close(Token::l_brace);
+      break;
+    default:
+      break;
+    }
+  }
+  state.diags.clear();
+
+  if (invalid)
+    return {CompletenessStatus::Invalid, {}};
+  if (lexicalError || !openBrackets.empty() ||
+      requiresFollowingToken(lastKind))
+    return {CompletenessStatus::Incomplete, std::string(lineIndent + 2, ' ')};
+  return {};
+}
+
+bool canStartTrailingExpression(Token::Kind kind) {
+  if (!ParserBase::isPrimaryExprStart(kind))
+    return false;
+  return kind != Token::kw_async && kind != Token::kw_comptime &&
+         kind != Token::kw_def && kind != Token::kw_fn &&
+         kind != Token::dot_dot_dot;
+}
+
+std::optional<TrailingExpression>
+findTrailingExpression(SharedState &state, const llvm::MemoryBuffer *buffer) {
+  std::optional<LexerCursor> cursor = findTrailingStatement(state, buffer);
+  if (!cursor || !canStartTrailingExpression(cursor->getToken().getKind()))
+    return std::nullopt;
+
+  Lexer lexer(state.diags, *cursor);
+  ExprNode *expression = nullptr;
+  size_t indentation = cursor->getToken().getIndentation().value_or(0);
+  if (failed(ParserBase(state, lexer).parseSimpleStmtExprs(expression,
+                                                           indentation)) ||
+      !expression || !lexer.getToken().is(Token::eof))
+    return std::nullopt;
+  if (expression->kind == ExprNode::kTypePattern ||
+      (expression->kind >= ExprNode::kFirstAssignStmt &&
+       expression->kind <= ExprNode::kLastAssignStmt))
+    return std::nullopt;
+
+  llvm::SMRange range = state.diags.convertToSMRange(expression->getRange());
+  if (!range.isValid())
+    return std::nullopt;
+  return TrailingExpression{range.Start.getPointer(), range.End.getPointer()};
+}
+
+void emitMappedLine(llvm::raw_string_ostream &output, CellSourceMap &map,
+                    StringRef line,
+                    std::optional<TrailingExpression> expression) {
+  const char *position = line.begin();
+  const char *lineEnd = line.end();
+  auto emitSource = [&](const char *end) {
+    if (end == position)
+      return;
+    StringRef text(position, end - position);
+    map.add(text, output.str().size());
+    output << text;
+    position = end;
+  };
+  if (expression && expression->start >= line.begin() &&
+      expression->start <= lineEnd) {
+    emitSource(expression->start);
+    output << "__xmojo_cell_display(";
+  }
+  if (expression && expression->end >= line.begin() &&
+      expression->end <= lineEnd) {
+    emitSource(expression->end);
+    output << ')';
+  }
+  emitSource(lineEnd);
+}
+
+WrappedCell wrapCell(StringRef source, const llvm::MemoryBuffer *sourceBuffer,
+                     SharedState &state, StringRef functionName) {
   SmallVector<StringRef> topLevel;
   SmallVector<StringRef> body;
   partitionCell(source, topLevel, body);
+  std::optional<TrailingExpression> trailing =
+      findTrailingExpression(state, sourceBuffer);
 
   WrappedCell wrapped;
   llvm::raw_string_ostream output(wrapped.source);
@@ -253,8 +494,8 @@ WrappedCell wrapCell(StringRef source, StringRef functionName) {
   } else {
     for (StringRef line : body) {
       output << "    ";
-      wrapped.map.add(line, output.str().size());
-      output << line << '\n';
+      emitMappedLine(output, wrapped.map, line, trailing);
+      output << '\n';
     }
   }
   output << "  except error:\n"
@@ -264,6 +505,9 @@ WrappedCell wrapCell(StringRef source, StringRef functionName) {
     wrapped.map.add(line, output.str().size());
     output << line << '\n';
   }
+  if (trailing)
+    output << "from xmojo import __xmojo_display as "
+              "__xmojo_cell_display\n";
   output.flush();
   return wrapped;
 }
@@ -309,6 +553,154 @@ ASTDecl *lookupSingleDeclaration(ASTDecl &scope, StringRef name) {
   return declarations.size() == 1 ? declarations.front() : nullptr;
 }
 
+class REPLListener final : public M::MojoParserREPLListener {
+public:
+  void notifyWrappedExpr(StringRef) override {}
+  void notifyFixedExpr(StringRef) override {}
+  void notifyDiagnostics(ArrayRef<llvm::SMDiagnostic>) override {}
+  bool shouldPersistVariable(StringRef, mlir::Type) override { return false; }
+};
+
+class ReferenceCollector final : public M::KGEN::LIT::ParserListener {
+public:
+  struct Reference {
+    SmallVector<M::MojoASTDeclRef> declarations;
+    llvm::SMRange range;
+  };
+
+  bool isInterestedInLoc(llvm::SMLoc) override { return collecting; }
+
+  void onRef(ArrayRef<ASTDecl *> declarations, StringRef,
+             llvm::SMRange range) override {
+    if (!collecting)
+      return;
+    Reference &reference = references.emplace_back();
+    reference.range = range;
+    llvm::transform(declarations, std::back_inserter(reference.declarations),
+                    [](ASTDecl *decl) { return M::MojoASTDeclRef(decl); });
+  }
+
+  bool collecting = false;
+  std::vector<Reference> references;
+};
+
+CompletionKind convertCompletionKind(
+    M::KGEN::Mojo::CodeCompletionResult::Kind kind) {
+  using Kind = M::KGEN::Mojo::CodeCompletionResult::Kind;
+  switch (kind) {
+  case Kind::kPackage:
+    return CompletionKind::Package;
+  case Kind::kModule:
+    return CompletionKind::Module;
+  case Kind::kStruct:
+    return CompletionKind::Struct;
+  case Kind::kFunction:
+    return CompletionKind::Function;
+  case Kind::kField:
+    return CompletionKind::Field;
+  case Kind::kVariable:
+    return CompletionKind::Variable;
+  case Kind::kTrait:
+    return CompletionKind::Trait;
+  case Kind::kUnknown:
+    return CompletionKind::Unknown;
+  }
+  llvm_unreachable("unknown Mojo completion kind");
+}
+
+class ToolingState {
+public:
+  ToolingState(MLIRContext &context,
+               const M::KGEN::CompilationOptions &options,
+               ArrayRef<std::string> importPaths)
+      : parserConfig(&context, options) {
+    sourceManager.setIncludeDirs(importPaths);
+    parserConfig.parserListener = &references;
+    parserContext =
+        std::make_unique<M::MojoParserContext>(sourceManager, parserConfig);
+  }
+
+  void record(StringRef source, StringRef moduleName) {
+    unsigned id = sourceManager.AddNewSourceBuffer(
+        llvm::MemoryBuffer::getMemBufferCopy(source, moduleName),
+        llvm::SMLoc());
+    (void)parserContext->parseREPLExpression(
+        replListener, id, "__xmojo_tooling_cell", {});
+  }
+
+  CompletionResult complete(StringRef source, size_t cursorPosition) {
+    cursorPosition = std::min(cursorPosition, source.size());
+    CompletionResult result;
+    result.cursorEnd = cursorPosition;
+    result.cursorStart = cursorPosition;
+    while (result.cursorStart &&
+           isCompletionCharacter(source[result.cursorStart - 1]))
+      --result.cursorStart;
+
+    auto completions = parserContext->codeCompleteREPLExpression(
+        source, cursorPosition, {});
+    result.items.reserve(completions.size());
+    for (auto &completion : completions) {
+      result.items.push_back({std::move(completion.label),
+                              std::move(completion.documentation),
+                              convertCompletionKind(completion.kind)});
+    }
+    return result;
+  }
+
+  InspectionResult inspect(StringRef source, size_t cursorPosition) {
+    InspectionResult result;
+    if (cursorPosition > source.size())
+      return result;
+
+    references.references.clear();
+    references.collecting = true;
+    unsigned id = sourceManager.AddNewSourceBuffer(
+        llvm::MemoryBuffer::getMemBufferCopy(source, "Mojo inspection"),
+        llvm::SMLoc());
+    const llvm::MemoryBuffer *buffer = sourceManager.getMemoryBuffer(id);
+    auto parsed = parserContext->parseREPLExpression(
+        replListener, id, "__xmojo_inspection_cell", {});
+    references.collecting = false;
+    if (!parsed.isValid())
+      return result;
+    parserContext->removeLastREPLExpression();
+
+    const char *cursor = buffer->getBufferStart() + cursorPosition;
+    for (const ReferenceCollector::Reference &reference :
+         references.references) {
+      llvm::SMRange range =
+          parserContext->getREPLLocMapper().mapRange(reference.range);
+      if (!range.isValid() || cursor < range.Start.getPointer() ||
+          cursor > range.End.getPointer())
+        continue;
+      for (M::MojoASTDeclRef declaration : reference.declarations) {
+        std::unique_ptr<M::PublicDecl> view = declaration.getDecl();
+        if (!view)
+          continue;
+        if (!result.markdown.empty())
+          result.markdown += "\n---\n\n";
+        result.markdown += view->getFullMarkdownString(*parserContext);
+      }
+      result.found = !result.markdown.empty();
+      return result;
+    }
+    return result;
+  }
+
+private:
+  static bool isCompletionCharacter(char character) {
+    return llvm::isAlnum(static_cast<unsigned char>(character)) ||
+           character == '_' || character == '$';
+  }
+
+  llvm::SourceMgr sourceManager;
+  ReferenceCollector references;
+  M::KGEN::LIT::ParserConfig parserConfig;
+  std::unique_ptr<M::MojoParserContext> parserContext;
+  REPLListener replListener;
+};
+
 } // namespace
 
 class xmojo::InteractiveParser::Impl {
@@ -318,6 +710,8 @@ public:
       : parserConfig(&context, options),
         parserContext(sourceManager, parserConfig) {
     sourceManager.setIncludeDirs(importPaths);
+    tooling =
+        std::make_unique<ToolingState>(context, options, importPaths);
   }
 
   std::optional<Cell> parse(StringRef source, StringRef moduleName,
@@ -329,7 +723,9 @@ public:
     const llvm::MemoryBuffer *sourceBuffer =
         sourceManager.getMemoryBuffer(sourceID);
 
-    WrappedCell wrapped = wrapCell(sourceBuffer->getBuffer(), functionName);
+    SharedState &state = parserContext.getSharedState();
+    WrappedCell wrapped = wrapCell(sourceBuffer->getBuffer(), sourceBuffer,
+                                   state, functionName);
     auto wrappedBuffer = llvm::MemoryBuffer::getMemBufferCopy(
         wrapped.source, (moduleName + " wrapper").str());
     unsigned wrappedID = sourceManager.AddNewSourceBuffer(
@@ -367,7 +763,6 @@ public:
     auto restoreHandler = llvm::scope_exit(
         [&] { sourceManager.setDiagHandler(oldHandler, oldContext); });
 
-    SharedState &state = parserContext.getSharedState();
     ASTDecl &module = buildModule(buffer, moduleName, state, committedModule);
     state.diags.clear();
     if (emittedError)
@@ -379,7 +774,21 @@ public:
                              "interactive cell entry point was not produced"});
       return std::nullopt;
     }
-    return Cell{M::MojoASTDeclRef(&module), M::MojoASTDeclRef(entryPoint)};
+    return Cell{M::MojoASTDeclRef(&module), M::MojoASTDeclRef(entryPoint),
+                source.str(), moduleName.str()};
+  }
+
+  CompletionResult complete(StringRef source, size_t cursorPosition) {
+    return tooling->complete(source, cursorPosition);
+  }
+
+  InspectionResult inspect(StringRef source, size_t cursorPosition) {
+    return tooling->inspect(source, cursorPosition);
+  }
+
+  CompletenessResult isComplete(StringRef source) {
+    return checkCompleteness(parserContext.getSharedState(), sourceManager,
+                             source);
   }
 
   llvm::SourceMgr sourceManager;
@@ -387,6 +796,7 @@ public:
   M::MojoParserContext parserContext;
   M::MojoASTDeclRef committedModule;
   std::vector<std::unique_ptr<CellSourceMap>> maps;
+  std::unique_ptr<ToolingState> tooling;
 };
 
 xmojo::InteractiveParser::InteractiveParser(
@@ -405,6 +815,21 @@ xmojo::InteractiveParser::parse(StringRef source, StringRef moduleName,
 
 void xmojo::InteractiveParser::commit(const Cell &cell) {
   impl->committedModule = cell.moduleDecl;
+  impl->tooling->record(cell.source, cell.moduleName);
+}
+
+CompletionResult xmojo::InteractiveParser::complete(StringRef source,
+                                                     size_t cursorPosition) {
+  return impl->complete(source, cursorPosition);
+}
+
+InspectionResult xmojo::InteractiveParser::inspect(StringRef source,
+                                                   size_t cursorPosition) {
+  return impl->inspect(source, cursorPosition);
+}
+
+CompletenessResult xmojo::InteractiveParser::isComplete(StringRef source) {
+  return impl->isComplete(source);
 }
 
 llvm::SourceMgr &xmojo::InteractiveParser::getSourceManager() {

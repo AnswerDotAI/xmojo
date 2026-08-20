@@ -55,9 +55,9 @@ at exact tested revisions.
 ./bazelw test @xmojo//:session_test @xmojo//:interpreter_test @xmojo//:kernel_test
 ```
 
-The kernel test uses the current `conkernelclient` checkout from the active
-Python environment, including its direct-argv `run_kernel` support. The other
-dependencies are built directly from the sibling worktrees.
+The kernel test uses `conkernelclient>=0.0.20` from the active Python
+environment and launches `xmojo` directly, without installing a kernelspec.
+The other dependencies are built directly from the sibling worktrees.
 
 ## Current scope
 
@@ -71,14 +71,40 @@ The current compiler and kernel PoC:
 - streams CPU `print()` output through per-session stdout/stderr callbacks;
 - uses a 128 KiB formatting buffer for each active CPU print call;
 - keeps simultaneous sessions isolated;
+- displays the final value expression as a Jupyter `execute_result`;
+- publishes explicit textual MIME bundles with `display()` and Mojo repr
+  traits;
+- completes and inspects names using Mojo's compiler APIs;
+- classifies complete, incomplete, and lexically invalid input;
 - serves signed Jupyter messages through xeus-zmq; and
 - maps successful execution and Mojo failures to matching shell and IOPub
   replies.
 
 It does not use Modular's LLDB-oriented REPL parser entry point, REPL context,
 or persistent-variable materializer. Persistent local values, typed expression
-results, rich display, completion, inspection, direct file-descriptor writes,
-interruption, and GPU execution are deliberately outside this PoC.
+history, binary rich-display buffers, display metadata, direct file-descriptor
+writes, interruption, and GPU execution are deliberately outside this PoC.
+
+Notebook code can opt into rich display without Python-style runtime
+reflection:
+
+```mojo
+from xmojo import HTMLRepr, display
+
+@fieldwise_init
+struct HTML(HTMLRepr):
+    var source: String
+
+    def _repr_html_(self) -> String:
+        return self.source
+
+display(HTML("<b>explicit display</b>"))
+HTML("<b>automatic final-expression result</b>")
+```
+
+`MarkdownRepr`, `SVGRepr`, `LaTeXRepr`, and `MIMEBundleRepr` provide the other
+supported representations. A `Writable` value also gets a `text/plain`
+representation; other values receive a type-name fallback.
 
 ## License
 

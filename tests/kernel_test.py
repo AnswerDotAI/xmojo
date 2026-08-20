@@ -22,6 +22,32 @@ class KernelStory(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(reply["status"], "ok")
             self.assertEqual(self.stream(published, "stdout"), "ready\n")
 
+            completion = (await client.cmd.complete(code="ans", cursor_pos=3))["content"]
+            self.assertEqual(completion["status"], "ok")
+            self.assertIn("answer", completion["matches"])
+            self.assertIn("_jupyter_types_experimental", completion["metadata"])
+
+            inspection = (await client.cmd.inspect(code="answer()", cursor_pos=3, detail_level=0))["content"]
+            self.assertTrue(inspection["found"])
+            self.assertIn("def answer", inspection["data"]["text/markdown"])
+
+            incomplete = (await client.cmd.is_complete(code="def unfinished():\n"))["content"]
+            self.assertEqual(incomplete["status"], "incomplete")
+            self.assertEqual(incomplete["indent"], "  ")
+
+            reply, published = await client.exec_drain("answer()\n", timeout=60)
+            self.assertEqual(reply["content"]["status"], "ok")
+            results = iopub_msgs(published, "execute_result")
+            self.assertEqual(len(results), 1)
+            self.assertEqual(results[0]["content"]["data"]["text/plain"], "Int(42)")
+
+            reply, published = await client.exec_drain(
+                "from xmojo import display\ndisplay(7)\n", timeout=60)
+            self.assertEqual(reply["content"]["status"], "ok")
+            displays = iopub_msgs(published, "display_data")
+            self.assertEqual(len(displays), 1)
+            self.assertEqual(displays[0]["content"]["data"]["text/plain"], "Int(7)")
+
             reply, published = await client.exec_drain("print(answer())\n", timeout=60)
             reply = reply["content"]
             self.assertEqual(reply["status"], "ok")

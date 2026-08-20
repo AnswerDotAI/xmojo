@@ -19,11 +19,26 @@ namespace xmojo {
 
 enum class DiagnosticSeverity { Note, Warning, Error };
 enum class OutputStream { Stdout, Stderr };
+enum class DisplayKind { DisplayData, ExecuteResult };
 
 /// Receives one complete CPU print emission during execute(). The callback is
 /// synchronous and must copy text that it needs after returning.
 using OutputCallback =
     llvm::unique_function<void(OutputStream, llvm::StringRef)>;
+
+struct MimeData {
+  std::string mimeType;
+  std::string data;
+};
+
+struct DisplayEvent {
+  DisplayKind kind;
+  std::vector<MimeData> data;
+};
+
+/// Receives one complete MIME bundle during execute(). The callback is
+/// synchronous and owns the supplied event after returning.
+using DisplayCallback = llvm::unique_function<void(DisplayEvent)>;
 
 struct Diagnostic {
   DiagnosticSeverity severity;
@@ -35,9 +50,45 @@ struct ExecutionResult {
   std::vector<Diagnostic> diagnostics;
 };
 
+enum class CompletionKind {
+  Unknown,
+  Package,
+  Module,
+  Struct,
+  Function,
+  Field,
+  Variable,
+  Trait,
+};
+
+struct CompletionItem {
+  std::string label;
+  std::string documentation;
+  CompletionKind kind = CompletionKind::Unknown;
+};
+
+struct CompletionResult {
+  std::vector<CompletionItem> items;
+  size_t cursorStart = 0;
+  size_t cursorEnd = 0;
+};
+
+struct InspectionResult {
+  bool found = false;
+  std::string markdown;
+};
+
+enum class CompletenessStatus { Complete, Incomplete, Invalid };
+
+struct CompletenessResult {
+  CompletenessStatus status = CompletenessStatus::Complete;
+  std::string indent;
+};
+
 struct SessionOptions {
   std::vector<std::string> importPaths;
   OutputCallback output;
+  DisplayCallback display;
 };
 
 /// A persistent, in-process Mojo compilation and execution session.
@@ -57,6 +108,9 @@ public:
   InteractiveSession &operator=(const InteractiveSession &) = delete;
 
   M::ErrorOr<ExecutionResult> execute(llvm::StringRef source);
+  CompletionResult complete(llvm::StringRef source, size_t cursorPosition);
+  InspectionResult inspect(llvm::StringRef source, size_t cursorPosition);
+  CompletenessResult isComplete(llvm::StringRef source);
 
 private:
   class Impl;

@@ -37,6 +37,7 @@
 #include <cerrno>
 #include <cstdint>
 #include <mutex>
+#include <optional>
 #include <unistd.h>
 
 using namespace M;
@@ -47,6 +48,8 @@ using namespace xmojo;
 namespace {
 
 thread_local OutputCallback *activeOutput = nullptr;
+thread_local DisplayCallback *activeDisplay = nullptr;
+thread_local std::optional<DisplayEvent> pendingDisplay;
 
 void writeAll(int fileDescriptor, const char *data, size_t size) {
   while (size != 0) {
@@ -72,16 +75,66 @@ extern "C" void xmojo_emit_print(const char *data, size_t size,
   writeAll(fileDescriptor, data, size);
 }
 
-class OutputScope {
+extern "C" void xmojo_display_begin(int32_t kind) {
+  pendingDisplay.emplace(DisplayEvent{
+      kind == 0 ? DisplayKind::DisplayData : DisplayKind::ExecuteResult, {}});
+}
+
+extern "C" void xmojo_display_add(const char *mimeType, size_t mimeTypeSize,
+                                  const char *data, size_t dataSize) {
+  if (!pendingDisplay)
+    return;
+  pendingDisplay->data.push_back(
+      {std::string(mimeType, mimeTypeSize), std::string(data, dataSize)});
+}
+
+extern "C" void xmojo_display_end() {
+  if (!pendingDisplay)
+    return;
+  if (activeDisplay) {
+    (*activeDisplay)(std::move(*pendingDisplay));
+  } else {
+    for (const MimeData &item : pendingDisplay->data) {
+      if (item.mimeType != "text/plain")
+        continue;
+      if (activeOutput)
+        (*activeOutput)(OutputStream::Stdout, item.data);
+      else
+        writeAll(STDOUT_FILENO, item.data.data(), item.data.size());
+      if (item.data.empty() || item.data.back() != '\n') {
+        if (activeOutput)
+          (*activeOutput)(OutputStream::Stdout, "\n");
+        else
+          writeAll(STDOUT_FILENO, "\n", 1);
+      }
+      break;
+    }
+  }
+  pendingDisplay.reset();
+}
+
+class RuntimeCallbackScope {
 public:
-  explicit OutputScope(OutputCallback &output) : previous(activeOutput) {
+  explicit RuntimeCallbackScope(SessionOptions &options)
+      : previousOutput(activeOutput), previousDisplay(activeDisplay),
+        previousPending(std::move(pendingDisplay)) {
+    OutputCallback &output = options.output;
     activeOutput = output ? &output : nullptr;
+    DisplayCallback &display = options.display;
+    activeDisplay = display ? &display : nullptr;
+    pendingDisplay.reset();
   }
 
-  ~OutputScope() { activeOutput = previous; }
+  ~RuntimeCallbackScope() {
+    pendingDisplay = std::move(previousPending);
+    activeDisplay = previousDisplay;
+    activeOutput = previousOutput;
+  }
 
 private:
-  OutputCallback *previous;
+  OutputCallback *previousOutput;
+  DisplayCallback *previousDisplay;
+  std::optional<DisplayEvent> previousPending;
 };
 
 void initializeTargets() {
@@ -186,10 +239,10 @@ public:
             libraryName, archiveOr.takeValue())) {
       return error.takeError();
     }
-    if (!outputSymbolDefined) {
-      if (ErrorOrSuccess error = defineOutputSymbol(libraryName))
+    if (!runtimeSymbolsDefined) {
+      if (ErrorOrSuccess error = defineRuntimeSymbols(libraryName))
         return error.takeError();
-      outputSymbolDefined = true;
+      runtimeSymbolsDefined = true;
     }
 
     ErrorOr<CompiledFunc> functionOr =
@@ -199,7 +252,7 @@ public:
 
     llvm::CrashRecoveryContext crashRecovery;
     crashRecovery.Enable();
-    OutputScope outputScope(options.output);
+    RuntimeCallbackScope callbackScope(options);
     bool executed =
         crashRecovery.RunSafely([&] { functionOr->invoke<void>(); });
     if (!executed) {
@@ -211,6 +264,18 @@ public:
     interactiveParser->commit(*cell);
     result.succeeded = true;
     return result;
+  }
+
+  CompletionResult complete(StringRef source, size_t cursorPosition) {
+    return interactiveParser->complete(source, cursorPosition);
+  }
+
+  InspectionResult inspect(StringRef source, size_t cursorPosition) {
+    return interactiveParser->inspect(source, cursorPosition);
+  }
+
+  CompletenessResult isComplete(StringRef source) {
+    return interactiveParser->isComplete(source);
   }
 
 private:
@@ -283,22 +348,27 @@ private:
     }
   }
 
-  ErrorOrSuccess defineOutputSymbol(StringRef libraryName) {
+  ErrorOrSuccess defineRuntimeSymbols(StringRef libraryName) {
     llvm::orc::ExecutionSession &session =
         executionEngine->getExecutionSession();
     llvm::orc::JITDylib *dylib = session.getJITDylibByName(libraryName);
     if (!dylib)
       return Error("could not find interactive session JITDylib");
 
-    std::string mangledName;
-    llvm::raw_string_ostream mangledNameStream(mangledName);
-    llvm::Mangler::getNameWithPrefix(mangledNameStream, "xmojo_emit_print",
-                                     executionEngine->getDataLayout());
-
     llvm::orc::SymbolMap symbols;
-    symbols[session.intern(mangledName)] = llvm::orc::ExecutorSymbolDef(
-        llvm::orc::ExecutorAddr::fromPtr(&xmojo_emit_print),
-        llvm::JITSymbolFlags::Exported);
+    auto addSymbol = [&](StringRef name, auto *function) {
+      std::string mangledName;
+      llvm::raw_string_ostream stream(mangledName);
+      llvm::Mangler::getNameWithPrefix(stream, name,
+                                       executionEngine->getDataLayout());
+      symbols[session.intern(mangledName)] = llvm::orc::ExecutorSymbolDef(
+          llvm::orc::ExecutorAddr::fromPtr(function),
+          llvm::JITSymbolFlags::Exported);
+    };
+    addSymbol("xmojo_emit_print", &xmojo_emit_print);
+    addSymbol("xmojo_display_begin", &xmojo_display_begin);
+    addSymbol("xmojo_display_add", &xmojo_display_add);
+    addSymbol("xmojo_display_end", &xmojo_display_end);
     if (llvm::Error error =
             dylib->define(llvm::orc::absoluteSymbols(std::move(symbols))))
       return Error(llvm::toString(std::move(error)));
@@ -315,7 +385,7 @@ private:
   std::unique_ptr<ObjectCompiler> objectCompiler;
   std::unique_ptr<ExecutionEngine> executionEngine;
   size_t nextCellID = 1;
-  bool outputSymbolDefined = false;
+  bool runtimeSymbolsDefined = false;
 };
 
 ErrorOr<std::unique_ptr<InteractiveSession>>
@@ -334,4 +404,18 @@ InteractiveSession::~InteractiveSession() = default;
 
 ErrorOr<ExecutionResult> InteractiveSession::execute(StringRef source) {
   return impl->execute(source);
+}
+
+CompletionResult InteractiveSession::complete(StringRef source,
+                                              size_t cursorPosition) {
+  return impl->complete(source, cursorPosition);
+}
+
+InspectionResult InteractiveSession::inspect(StringRef source,
+                                             size_t cursorPosition) {
+  return impl->inspect(source, cursorPosition);
+}
+
+CompletenessResult InteractiveSession::isComplete(StringRef source) {
+  return impl->isComplete(source);
 }

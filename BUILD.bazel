@@ -41,7 +41,10 @@ mojo_library(
 
 mojo_test_environment(
     name = "stdlib_environment",
-    data = [":std"],
+    data = [
+        ":std",
+        "//mojo/xmojo:xmojo",
+    ],
 )
 
 cc_import(

@@ -36,9 +36,11 @@ private:
   nl::json interrupt_request_impl() override;
 
   void emitOutput(OutputStream stream, llvm::StringRef text);
+  void emitDisplay(DisplayEvent event);
 
   std::unique_ptr<InteractiveSession> session;
   bool outputEnabled = true;
+  int currentExecutionCounter = 0;
 };
 
 } // namespace xmojo

@@ -30,6 +30,9 @@ class CompilationOptions;
 namespace xmojo {
 
 struct Diagnostic;
+struct CompletionResult;
+struct InspectionResult;
+struct CompletenessResult;
 
 /// Parses interactive cells against an explicitly committed declaration
 /// history. Parsing a cell never changes the history until commit is called.
@@ -38,6 +41,8 @@ public:
   struct Cell {
     M::MojoASTDeclRef moduleDecl;
     M::MojoASTDeclRef entryPointDecl;
+    std::string source;
+    std::string moduleName;
   };
 
   InteractiveParser(mlir::MLIRContext &context,
@@ -52,6 +57,10 @@ public:
                             llvm::StringRef functionName,
                             std::vector<Diagnostic> &diagnostics);
   void commit(const Cell &cell);
+
+  CompletionResult complete(llvm::StringRef source, size_t cursorPosition);
+  InspectionResult inspect(llvm::StringRef source, size_t cursorPosition);
+  CompletenessResult isComplete(llvm::StringRef source);
 
   llvm::SourceMgr &getSourceManager();
 

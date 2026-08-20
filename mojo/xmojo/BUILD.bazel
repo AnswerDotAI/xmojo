@@ -1,0 +1,8 @@
+load("@//bazel:api.bzl", "mojo_library")
+
+mojo_library(
+    name = "xmojo",
+    srcs = glob(["*.mojo"]),
+    validate_missing_docs = False,
+    deps = ["//:std"],
+)
