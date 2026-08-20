@@ -1,11 +1,45 @@
-load("@//bazel:api.bzl", "mojo_test_environment")
+load(
+    "@//bazel:api.bzl",
+    "mojo_library",
+    "mojo_overlay_layer",
+    "mojo_overlay_srcs",
+    "mojo_test_environment",
+)
 load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
 load("@rules_cc//cc:cc_test.bzl", "cc_test")
 
+mojo_overlay_layer(
+    name = "modular_stdlib_sources",
+    srcs = ["@//mojo/stdlib/std:std_srcs"],
+    strip_prefix = "mojo/stdlib/std/",
+)
+
+mojo_overlay_layer(
+    name = "xmojo_stdlib_sources",
+    srcs = glob(["mojo/stdlib/std/**/*.mojo"]),
+    strip_prefix = "mojo/stdlib/std/",
+)
+
+mojo_overlay_srcs(
+    name = "overlaid_stdlib_sources",
+    layers = [
+        ":modular_stdlib_sources",
+        ":xmojo_stdlib_sources",
+    ],
+    stage_root = "std/",
+)
+
+mojo_library(
+    name = "std",
+    srcs = [":overlaid_stdlib_sources"],
+    validate_missing_docs = False,
+    deps = ["@//KGEN:CompilerRT"],
+)
+
 mojo_test_environment(
     name = "stdlib_environment",
-    data = ["@mojo//:std"],
+    data = [":std"],
 )
 
 cc_library(
@@ -32,6 +66,7 @@ cc_library(
         "@//KGEN:TransformUtils",
         "@//Support:Context",
         "@//Support:MDialect",
+        "@llvm-project//llvm:OrcJIT",
         "@llvm-project//llvm:Support",
         "@llvm-project//mlir:IR",
     ],

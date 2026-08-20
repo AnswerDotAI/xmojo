@@ -12,6 +12,7 @@ InteractiveSession
 │   ├── chained declaration resolution
 │   └── explicit transactional history
 ├── ORC object compilation and execution
+├── xmojo stdlib overlay and scoped output callbacks
 ├── mojoorc terminal frontend
 └── MojoInterpreter xeus frontend (future)
 ```
@@ -50,9 +51,20 @@ Splitting cells into separate JITDylibs does not work: Mojo normally gives those
 helper symbols private linkage because a one-shot compilation has no later
 consumer.
 
-The frontend targets use Modular's `mojo_test_environment` rule directly. It
-precompiles `std`, computes its runfiles import path, and stages the runtime
-libraries without requiring an installed Mojo toolchain.
+The frontend targets use Modular's `mojo_test_environment` rule directly. An
+xmojo-owned source overlay replaces the default stdlib plugin while retaining
+Modular's accelerator plugins, then precompiles the resulting `std`. The
+environment computes its runfiles import path and stages the runtime libraries
+without requiring an installed Mojo toolchain.
+
+CPU `print()` calls use the stdlib's `print_emit_fn` hook. Generated code calls
+an explicitly registered ORC symbol, which routes stdout and stderr to the
+callback active for that synchronous session execution. Calls without a
+callback and calls targeting other file descriptors fall back to POSIX
+`write`. Each interactive module sets `HEAP_BUFFER_BYTES=131072`, making the
+buffer stack storage per active print call rather than permanent process
+storage. Direct `FileDescriptor.write_*` calls and GPU output remain outside
+the current boundary.
 
 ## Design constraints
 

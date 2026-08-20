@@ -58,13 +58,15 @@ The current compiler PoC:
 - resolves later cells against explicitly committed declaration history;
 - commits no history from a cell that fails parsing or compilation;
 - maps diagnostics from generated wrappers back to the submitted source;
-- executes uniquely named cell entry points in one ORC JITDylib; and
+- executes uniquely named cell entry points in one ORC JITDylib;
+- streams CPU `print()` output through per-session stdout/stderr callbacks;
+- uses a 128 KiB formatting buffer for each active CPU print call; and
 - keeps simultaneous sessions isolated.
 
 It does not use Modular's LLDB-oriented REPL parser entry point, REPL context,
 or persistent-variable materializer. Persistent local values, typed expression
-results, stream routing, interruption, GPU execution, and the xeus frontend are
-deliberately outside this PoC.
+results, direct file-descriptor writes, interruption, GPU execution, and the
+xeus frontend are deliberately outside this PoC.
 
 ## License
 

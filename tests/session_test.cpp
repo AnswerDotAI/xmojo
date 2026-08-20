@@ -10,20 +10,38 @@
 
 #include <memory>
 #include <string>
+#include <utility>
 
 using xmojo::DiagnosticSeverity;
 using xmojo::ExecutionResult;
 using xmojo::InteractiveSession;
+using xmojo::OutputStream;
+using xmojo::SessionOptions;
 
 namespace {
 
-std::unique_ptr<InteractiveSession> createSession() {
-  auto sessionOr = InteractiveSession::create();
+std::unique_ptr<InteractiveSession> createSession(SessionOptions options = {}) {
+  auto sessionOr = InteractiveSession::create(std::move(options));
   if (!sessionOr.isError())
     return sessionOr.takeValue();
   ADD_FAILURE() << sessionOr.getError();
   return nullptr;
 }
+
+struct CapturedOutput {
+  std::string standardOutput;
+  std::string standardError;
+
+  SessionOptions sessionOptions() {
+    SessionOptions options;
+    options.output = [this](OutputStream stream, llvm::StringRef text) {
+      std::string &destination =
+          stream == OutputStream::Stdout ? standardOutput : standardError;
+      destination.append(text.data(), text.size());
+    };
+    return options;
+  }
+};
 
 std::string diagnosticsText(const ExecutionResult &result) {
   std::string text;
@@ -69,7 +87,8 @@ testing::AssertionResult executionFailsWith(InteractiveSession &session,
 }
 
 TEST(InteractiveSessionTest, RunsInteractiveSession) {
-  auto session = createSession();
+  CapturedOutput output;
+  auto session = createSession(output.sessionOptions());
   ASSERT_NE(session, nullptr);
 
   ASSERT_TRUE(executionSucceeds(*session, R"(
@@ -107,6 +126,17 @@ def answer() -> Int:
   ASSERT_TRUE(executionSucceeds(*session, "print(answer())\n"));
   ASSERT_TRUE(executionSucceeds(*session, "print(parameterized[7]())\n"));
   ASSERT_TRUE(executionSucceeds(*session, "print(add(Pair(3, 4).left, 5))\n"));
+  EXPECT_EQ(output.standardOutput, "6\n42\n7\n8\n");
+
+  ASSERT_TRUE(executionSucceeds(*session, R"(
+from std.sys import stderr
+print("warning", file=stderr)
+)"));
+  EXPECT_EQ(output.standardError, "warning\n");
+
+  std::string longText(4096, 'x');
+  ASSERT_TRUE(executionSucceeds(*session, "print(\"" + longText + "\")\n"));
+  EXPECT_EQ(output.standardOutput, "6\n42\n7\n8\n" + longText + "\n");
 
   ASSERT_TRUE(executionFailsWith(*session, R"(
 def rejected() -> Int:
@@ -119,6 +149,8 @@ var second = unknown_name
   ASSERT_TRUE(executionFailsWith(*session, "print(rejected())\n", "rejected"));
 
   EXPECT_TRUE(executionSucceeds(*session, "print(answer())\n"));
+  EXPECT_EQ(output.standardOutput, "6\n42\n7\n8\n" + longText + "\n42\n");
+  EXPECT_EQ(output.standardError, "warning\n");
 }
 
 TEST(InteractiveSessionTest, IsolatesSessions) {

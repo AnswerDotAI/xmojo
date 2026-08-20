@@ -13,6 +13,7 @@
 #include "KGEN/Compiler/KGENCompiler.h"
 #include "KGEN/Compiler/ObjectCompiler.h"
 #include "KGEN/ExecutionEngine/JIT/StaticArchiveLayer.h"
+#include "KGEN/KGENDialect/KGENDialect.h"
 #include "KGEN/KGENDialect/KGENUtils.h"
 #include "KGEN/LITDialect/LITOps.h"
 #include "KGEN/MojoParser/EntryPoint.h"
@@ -26,11 +27,17 @@
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/IR/SymbolTable.h"
+#include "llvm/ExecutionEngine/Orc/AbsoluteSymbols.h"
+#include "llvm/IR/Mangler.h"
 #include "llvm/Support/CrashRecoveryContext.h"
+#include "llvm/Support/Error.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/TargetSelect.h"
 
+#include <cerrno>
+#include <cstdint>
 #include <mutex>
+#include <unistd.h>
 
 using namespace M;
 using namespace M::KGEN;
@@ -38,6 +45,44 @@ using namespace mlir;
 using namespace xmojo;
 
 namespace {
+
+thread_local OutputCallback *activeOutput = nullptr;
+
+void writeAll(int fileDescriptor, const char *data, size_t size) {
+  while (size != 0) {
+    ssize_t written = ::write(fileDescriptor, data, size);
+    if (written < 0 && errno == EINTR)
+      continue;
+    if (written <= 0)
+      return;
+    data += written;
+    size -= written;
+  }
+}
+
+extern "C" void xmojo_emit_print(const char *data, size_t size,
+                                 int32_t fileDescriptor) {
+  if (activeOutput &&
+      (fileDescriptor == STDOUT_FILENO || fileDescriptor == STDERR_FILENO)) {
+    (*activeOutput)(fileDescriptor == STDOUT_FILENO ? OutputStream::Stdout
+                                                    : OutputStream::Stderr,
+                    StringRef(data, size));
+    return;
+  }
+  writeAll(fileDescriptor, data, size);
+}
+
+class OutputScope {
+public:
+  explicit OutputScope(OutputCallback &output) : previous(activeOutput) {
+    activeOutput = output ? &output : nullptr;
+  }
+
+  ~OutputScope() { activeOutput = previous; }
+
+private:
+  OutputCallback *previous;
+};
 
 void initializeTargets() {
   static std::once_flag once;
@@ -106,6 +151,7 @@ public:
         body.getWithFnEffects(body.getFnEffects().setCABI(true)),
         signature.getParamListAttrs()));
 
+    (*module)->setAttr(EnvAttr::getEnvAttrName(), compilationEnvironment);
     extendWithModularEnvAttr(*module, nullptr);
 
     KGENCompiler compiler(mlirContext, compilationOptions);
@@ -140,6 +186,11 @@ public:
             libraryName, archiveOr.takeValue())) {
       return error.takeError();
     }
+    if (!outputSymbolDefined) {
+      if (ErrorOrSuccess error = defineOutputSymbol(libraryName))
+        return error.takeError();
+      outputSymbolDefined = true;
+    }
 
     ErrorOr<CompiledFunc> functionOr =
         executionEngine->lookup(libraryName, functionName);
@@ -148,6 +199,7 @@ public:
 
     llvm::CrashRecoveryContext crashRecovery;
     crashRecovery.Enable();
+    OutputScope outputScope(options.output);
     bool executed =
         crashRecovery.RunSafely([&] { functionOr->invoke<void>(); });
     if (!executed) {
@@ -172,6 +224,13 @@ private:
     registerKGENToLLVMTranslation(registry);
     registerContext(registry, runtimeContext);
     mlirContext.appendDialectRegistry(registry);
+    mlirContext.loadDialect<KGENDialect>();
+
+    auto compilationEnvironmentOr = compilationOptions.parseDefinesWithDefaults(
+        &mlirContext, {"HEAP_BUFFER_BYTES=131072"});
+    if (compilationEnvironmentOr.isError())
+      return compilationEnvironmentOr.takeError();
+    compilationEnvironment = *compilationEnvironmentOr;
 
     MojoConfig mojoConfig = MojoConfig::fromContext(runtimeContext);
     SmallVector<StringRef> configuredImportPaths;
@@ -224,15 +283,39 @@ private:
     }
   }
 
+  ErrorOrSuccess defineOutputSymbol(StringRef libraryName) {
+    llvm::orc::ExecutionSession &session =
+        executionEngine->getExecutionSession();
+    llvm::orc::JITDylib *dylib = session.getJITDylibByName(libraryName);
+    if (!dylib)
+      return Error("could not find interactive session JITDylib");
+
+    std::string mangledName;
+    llvm::raw_string_ostream mangledNameStream(mangledName);
+    llvm::Mangler::getNameWithPrefix(mangledNameStream, "xmojo_emit_print",
+                                     executionEngine->getDataLayout());
+
+    llvm::orc::SymbolMap symbols;
+    symbols[session.intern(mangledName)] = llvm::orc::ExecutorSymbolDef(
+        llvm::orc::ExecutorAddr::fromPtr(&xmojo_emit_print),
+        llvm::JITSymbolFlags::Exported);
+    if (llvm::Error error =
+            dylib->define(llvm::orc::absoluteSymbols(std::move(symbols))))
+      return Error(llvm::toString(std::move(error)));
+    return M::success();
+  }
+
   ContextRef runtimeContext;
   SessionOptions options;
   CompilationOptions compilationOptions;
+  EnvAttr compilationEnvironment;
   MLIRContext mlirContext;
   std::unique_ptr<InteractiveParser> interactiveParser;
   TargetInfoAttr targetInfo;
   std::unique_ptr<ObjectCompiler> objectCompiler;
   std::unique_ptr<ExecutionEngine> executionEngine;
   size_t nextCellID = 1;
+  bool outputSymbolDefined = false;
 };
 
 ErrorOr<std::unique_ptr<InteractiveSession>>

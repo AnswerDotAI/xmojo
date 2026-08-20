@@ -8,6 +8,7 @@
 #define XMOJO_INTERACTIVESESSION_H
 
 #include "Support/ErrorOr.h"
+#include "llvm/ADT/FunctionExtras.h"
 #include "llvm/ADT/StringRef.h"
 
 #include <memory>
@@ -17,6 +18,12 @@
 namespace xmojo {
 
 enum class DiagnosticSeverity { Note, Warning, Error };
+enum class OutputStream { Stdout, Stderr };
+
+/// Receives one complete CPU print emission during execute(). The callback is
+/// synchronous and must copy text that it needs after returning.
+using OutputCallback =
+    llvm::unique_function<void(OutputStream, llvm::StringRef)>;
 
 struct Diagnostic {
   DiagnosticSeverity severity;
@@ -30,6 +37,7 @@ struct ExecutionResult {
 
 struct SessionOptions {
   std::vector<std::string> importPaths;
+  OutputCallback output;
 };
 
 /// A persistent, in-process Mojo compilation and execution session.
