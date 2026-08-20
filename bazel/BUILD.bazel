@@ -1,0 +1,21 @@
+load(
+    ":official_mojo.bzl",
+    "official_mojo_toolchain",
+)
+
+package(default_visibility = ["//visibility:public"])
+
+toolchain_type(name = "official_mojo_toolchain_type")
+
+official_mojo_toolchain(
+    name = "official_mojo",
+    compiler_path = ".pixi/envs/default/bin/mojo",
+    compiler_version = "Mojo 1.1.0.dev2026081919 (896e3c9a)",
+    modular_home = ".pixi/envs/default/share/max",
+)
+
+toolchain(
+    name = "official_mojo_toolchain",
+    toolchain = ":official_mojo",
+    toolchain_type = ":official_mojo_toolchain_type",
+)

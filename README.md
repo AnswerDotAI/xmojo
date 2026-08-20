@@ -51,14 +51,21 @@ git/
 └── cppzmq/
 ```
 
-No packaged Mojo compiler or locally patched Modular checkout is used. `xmojo`
-intentionally depends on private Modular C++ targets and tracks their changes
-at exact tested revisions.
+The normal xmojo build uses no packaged Mojo compiler or locally patched
+Modular checkout. `xmojo` intentionally depends on private Modular C++ targets
+and tracks their changes at exact tested revisions. The Metal interop test uses
+a separately pinned official compiler because Modular's open-source compiler
+does not contain the accelerator backend.
 
 ```bash
 ./bazelw build @xmojo//:mojoorc @xmojo//:xmojo
 ./bazelw test @xmojo//:session_test @xmojo//:interpreter_test @xmojo//:kernel_test
+./bazelw2 test @xmojo//:gpu_shared_library_test
 ```
+
+The GPU test requires Pixi and Xcode's optional Metal toolchain. Install the
+latter once with `xcodebuild -downloadComponent MetalToolchain`; `bazelw2`
+installs xmojo's locked official Mojo/MAX environment automatically.
 
 The kernel test uses `conkernelclient>=0.0.20` from the active Python
 environment and launches `xmojo` directly, without installing a kernelspec.
@@ -95,9 +102,15 @@ It does not use Modular's LLDB-oriented REPL parser entry point, REPL context,
 or persistent-variable materializer. A persistent variable keeps its original
 type, cannot be redeclared, and is visible only to later cell statements—not
 implicitly inside function bodies. Mutations completed before a runtime error
-remain; new variables from the raising cell do not. Typed expression history,
+remain; new variables from the raising cell do not. Persistent values must own
+their data or refer only to static storage; borrowed views must first be copied
+into an owned value. Typed expression history,
 binary rich-display buffers, display metadata, direct file-descriptor writes,
-interruption, and GPU execution are deliberately outside this PoC.
+interruption, and compiling GPU kernels inside cells are deliberately outside
+this PoC. A macOS experiment does support calling ahead-of-time GPU launchers:
+the pinned official Mojo compiler embeds a Metal kernel in a shared library,
+while source-built xmojo creates the MAX device objects and dispatches through
+the launcher's C ABI.
 
 Notebook code can opt into rich display without Python-style runtime
 reflection:

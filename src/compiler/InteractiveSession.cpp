@@ -29,6 +29,7 @@
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/IR/SymbolTable.h"
 #include "llvm/ExecutionEngine/Orc/AbsoluteSymbols.h"
+#include "llvm/ExecutionEngine/Orc/ExecutionUtils.h"
 #include "llvm/IR/Mangler.h"
 #include "llvm/Support/CrashRecoveryContext.h"
 #include "llvm/Support/Error.h"
@@ -361,7 +362,9 @@ private:
 
   Impl(ContextRef runtimeContext, SessionOptions options)
       : runtimeContext(std::move(runtimeContext)), options(std::move(options)),
-        mlirContext(MLIRContext::Threading::DISABLED) {}
+        mlirContext(MLIRContext::Threading::DISABLED) {
+    compilationOptions.targetAccelerator = this->options.targetAccelerator;
+  }
 
   ErrorOrSuccess initialize() {
     DialectRegistry registry;
@@ -451,6 +454,13 @@ private:
     llvm::orc::JITDylib *dylib = session.getJITDylibByName(libraryName);
     if (!dylib)
       return Error("could not find interactive session JITDylib");
+
+    auto processSymbols =
+        llvm::orc::DynamicLibrarySearchGenerator::GetForCurrentProcess(
+            executionEngine->getDataLayout().getGlobalPrefix());
+    if (!processSymbols)
+      return Error(llvm::toString(processSymbols.takeError()));
+    dylib->addGenerator(std::move(*processSymbols));
 
     llvm::orc::SymbolMap symbols;
     auto addSymbol = [&](StringRef name, auto *function) {

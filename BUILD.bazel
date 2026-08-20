@@ -5,6 +5,7 @@ load(
     "mojo_overlay_srcs",
     "mojo_test_environment",
 )
+load("//bazel:official_mojo.bzl", "official_mojo_shared_library")
 load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
 load("@rules_cc//cc:cc_import.bzl", "cc_import")
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
@@ -39,9 +40,28 @@ mojo_library(
     deps = ["@//KGEN:CompilerRT"],
 )
 
+mojo_library(
+    name = "max",
+    srcs = ["@//max/mojo/max:max_srcs"],
+    validate_missing_docs = False,
+    deps = [
+        ":std",
+        "@modular_wheel//:AsyncRTMojoBindings_lib",
+    ],
+)
+
 mojo_test_environment(
     name = "stdlib_environment",
     data = [
+        ":std",
+        "//mojo/xmojo:xmojo",
+    ],
+)
+
+mojo_test_environment(
+    name = "gpu_environment",
+    data = [
+        ":max",
         ":std",
         "//mojo/xmojo:xmojo",
     ],
@@ -136,6 +156,36 @@ cc_binary(
         "MODULAR_MOJO_MAX_IMPORT_PATH": "$(COMPUTED_IMPORT_PATH)",
     },
     toolchains = [":stdlib_environment"],
+    deps = [":interactive_session"],
+)
+
+official_mojo_shared_library(
+    name = "gpu_launcher",
+    src = "tests/gpu_launcher.mojo",
+    imports = ["@//max/mojo/max:max_srcs"],
+    shared_lib_name = "libxmojo_gpu_test.dylib",
+)
+
+cc_test(
+    name = "gpu_shared_library_test",
+    srcs = ["tests/gpu_shared_library_test.cpp"],
+    args = ["$(rootpath :gpu_launcher)"],
+    data = [
+        ":gpu_environment",
+        ":gpu_launcher",
+    ],
+    env = {
+        "MODULAR_CRASH_REPORTING_ENABLED": "0",
+        "MODULAR_DEVICE_CONTEXT_MEMORY_MANAGER_ONLY": "false",
+        "MODULAR_DEVICE_CONTEXT_MEMORY_MANAGER_SIZE": "0",
+        "MODULAR_MOJO_MAX_IMPORT_PATH": "$(COMPUTED_IMPORT_PATH)",
+    },
+    linkopts = select({
+        "@platforms//os:macos": ["-ldl"],
+        "//conditions:default": ["-ldl"],
+    }),
+    target_compatible_with = ["@platforms//os:macos"],
+    toolchains = [":gpu_environment"],
     deps = [":interactive_session"],
 )
 

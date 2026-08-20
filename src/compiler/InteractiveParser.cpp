@@ -15,6 +15,7 @@
 #include "xmojo/InteractiveSession.h"
 
 #include "KGEN/KGENDialect/KGENDialect.h"
+#include "KGEN/LITDialect/LITAttrs.h"
 #include "KGEN/LITDialect/LITOps.h"
 #include "KGEN/MojoParser/ASTDecl.h"
 #include "KGEN/MojoParser/DeclResolver.h"
@@ -656,6 +657,33 @@ bool collectDeclaredVarTypes(
   return true;
 }
 
+bool isStaticOrigin(mlir::TypedAttr origin) {
+  using namespace M::KGEN::LIT;
+  origin = OriginType::stripMutCastAndRebind(origin);
+  if (M::KGEN::sugarIsa<StaticOriginAttr>(origin))
+    return true;
+  if (auto field = M::KGEN::sugarDynCast<OriginFieldAttr>(origin))
+    return isStaticOrigin(field.getBase());
+  if (auto interior = M::KGEN::sugarDynCast<InteriorOriginAttr>(origin))
+    return isStaticOrigin(interior.getBase());
+  if (auto subtree = M::KGEN::sugarDynCast<OriginSubtreeAttr>(origin))
+    return isStaticOrigin(subtree.getBase());
+  if (auto originUnion = M::KGEN::sugarDynCast<OriginUnionAttr>(origin))
+    return !originUnion.getOperands().empty() &&
+           llvm::all_of(originUnion.getOperands(), isStaticOrigin);
+  return false;
+}
+
+bool hasNonStaticOrigin(mlir::Type type) {
+  bool result = false;
+  type.walk([&](mlir::TypedAttr attribute) {
+    if (mlir::isa<M::KGEN::LIT::OriginType>(attribute.getType()) &&
+        !isStaticOrigin(attribute))
+      result = true;
+  });
+  return result;
+}
+
 class REPLListener final : public M::MojoParserREPLListener {
 public:
   void notifyWrappedExpr(StringRef) override {}
@@ -773,7 +801,7 @@ public:
         replListener, id, "__xmojo_inspection_cell", types);
     references.collecting = false;
     if (!parsed.isValid())
-      return result;
+      return inspectPersistent(source, cursorPosition, variables);
     parserContext->removeLastREPLExpression();
 
     const char *cursor = buffer->getBufferStart() + cursorPosition;
@@ -793,9 +821,11 @@ public:
         result.markdown += view->getFullMarkdownString(*parserContext);
       }
       result.found = !result.markdown.empty();
-      return result;
+      if (result.found)
+        return result;
+      break;
     }
-    return result;
+    return inspectPersistent(source, cursorPosition, variables);
   }
 
 private:
@@ -811,6 +841,45 @@ private:
   static bool isCompletionCharacter(char character) {
     return llvm::isAlnum(static_cast<unsigned char>(character)) ||
            character == '_' || character == '$';
+  }
+
+  InspectionResult inspectPersistent(
+      StringRef source, size_t cursorPosition,
+      ArrayRef<xmojo::InteractiveParser::PersistentVar> variables) {
+    size_t start = cursorPosition;
+    while (start && isCompletionCharacter(source[start - 1]))
+      --start;
+    size_t end = cursorPosition;
+    while (end < source.size() && isCompletionCharacter(source[end]))
+      ++end;
+    StringRef name = source.slice(start, end);
+    if (name.empty())
+      return {};
+
+    if (start && source[start - 1] == '.') {
+      CompletionResult completions = complete(source, end, variables);
+      InspectionResult result;
+      for (const auto &item : completions.items) {
+        if (item.label != name || item.documentation.empty())
+          continue;
+        if (!result.markdown.empty())
+          result.markdown += "\n---\n\n";
+        result.markdown += item.documentation;
+      }
+      result.found = !result.markdown.empty();
+      return result;
+    }
+
+    auto variable = llvm::find_if(variables, [&](const auto &candidate) {
+      return candidate.name == name;
+    });
+    if (variable == variables.end())
+      return {};
+    std::string type = M::MojoASTTypeRef(variable->type).getAsString(
+        parserContext->getSharedState());
+    return {true, "### variable `" + variable->name +
+                      "`\n\n---\n\n###\n```mojo\nvar " + variable->name +
+                      ": " + type + "\n```"};
   }
 
   llvm::SourceMgr sourceManager;
@@ -917,9 +986,18 @@ public:
               moduleName.str(),
               {}};
     if (!collectDeclaredVarTypes(*entryPoint, declaredVars, cell.newVars)) {
-      diagnostics.push_back(
-          {DiagnosticSeverity::Error, "interactive cell declared a variable "
-                                      "the compiler did not resolve"});
+      diagnostics.push_back({DiagnosticSeverity::Error,
+                             "interactive cell declared a variable "
+                             "the compiler did not resolve"});
+      return std::nullopt;
+    }
+    for (const PersistentVar &variable : cell.newVars) {
+      if (!hasNonStaticOrigin(variable.type))
+        continue;
+      diagnostics.push_back({DiagnosticSeverity::Error,
+                             "cannot persist borrowed value in variable '" +
+                                 variable.name +
+                                 "'; persist an owned copy instead"});
       return std::nullopt;
     }
     return cell;
