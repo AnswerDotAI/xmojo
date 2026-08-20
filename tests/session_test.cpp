@@ -279,6 +279,36 @@ TEST(InteractiveSessionTest, ReportsRuntimeRaise) {
   EXPECT_TRUE(executionSucceeds(*session, "42\n"));
 }
 
+TEST(InteractiveSessionTest, PersistsTopLevelVariables) {
+  CapturedOutput output;
+  auto session = createSession(output.sessionOptions());
+  ASSERT_NE(session, nullptr);
+
+  // A top-level `var` in one cell must be visible to later cells, the way a
+  // notebook keeps session state.
+  EXPECT_TRUE(executionSucceeds(*session, "var x = 42\n"));
+  EXPECT_TRUE(executionSucceeds(*session, "print(x)\n"));
+
+  // Later cells reach the same storage, so assigning without redeclaring
+  // updates the session's value.
+  EXPECT_TRUE(executionSucceeds(*session, "x = x + 1\n"));
+  EXPECT_TRUE(executionSucceeds(*session, "print(x)\n"));
+
+  // Values owning heap memory persist alongside earlier variables.
+  EXPECT_TRUE(executionSucceeds(*session, "var greeting = String(\"hi\")\n"));
+  EXPECT_TRUE(executionSucceeds(*session, "print(greeting, x)\n"));
+  EXPECT_EQ(output.standardOutput, "42\n43\nhi 43\n");
+
+  // Redeclaring a name rebinds it to the cell's new value.
+  EXPECT_TRUE(executionSucceeds(*session, "var x = 7\n"));
+  EXPECT_TRUE(executionSucceeds(*session, "print(x)\n"));
+
+  // A cell that raises commits nothing, its variables included.
+  EXPECT_TRUE(executionFailsWith(*session, "var lost = 1\nraise Error(\"no\")\n",
+                                 "no"));
+  EXPECT_TRUE(executionFailsWith(*session, "print(lost)\n", "lost"));
+}
+
 TEST(InteractiveSessionTest, IsolatesSessions) {
   auto first = createSession();
   auto second = createSession();

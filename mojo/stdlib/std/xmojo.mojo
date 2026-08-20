@@ -7,6 +7,8 @@
 
 from std.collections import List
 from std.ffi import c_int, c_size_t, external_call
+from std.memory import Layout, MutOpaquePointer, Pointer
+from std.memory.alloc import alloc
 
 
 trait HTMLRepr:
@@ -135,3 +137,18 @@ def __xmojo_error(error: Error):
         message.as_bytes().unsafe_ptr(),
         c_size_t(message.byte_length()),
     )
+
+
+comptime __xmojo_slot_array = Pointer[
+    MutOpaquePointer[MutUntrackedOrigin], MutUntrackedOrigin
+]
+"""One session-owned pointer per persistent variable, in cell argument order."""
+
+
+def __xmojo_persist[T: Movable](
+    slots: __xmojo_slot_array, index: Int, var value: T
+):
+    """Move a cell's top-level `var` into storage outliving the cell."""
+    var storage = alloc(Layout[T](count=1)).unsafe_leak()
+    storage.unsafe_write(value^)
+    slots[unsafe_offset=index] = storage.unsafe_bitcast[NoneType]()

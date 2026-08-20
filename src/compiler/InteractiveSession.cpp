@@ -193,8 +193,12 @@ public:
     std::string moduleName = ("Mojo cell " + Twine(cellID)).str();
     std::string functionName =
         ("__mojo_interactive_cell_" + Twine(cellID)).str();
+    std::vector<InteractiveParser::PersistentVar> parserVars;
+    parserVars.reserve(sessionVars.size());
+    for (const SessionVar &sessionVar : sessionVars)
+      parserVars.push_back({sessionVar.name, sessionVar.type});
     std::optional<InteractiveParser::Cell> cell = interactiveParser->parse(
-        source, moduleName, functionName, result.diagnostics);
+        source, moduleName, functionName, parserVars, result.diagnostics);
     if (!cell)
       return result;
 
@@ -262,11 +266,20 @@ public:
     if (functionOr.isError())
       return functionOr.takeError();
 
+    // One slot per variable, in the order the wrapper expects: the session's
+    // existing storage first, then an empty slot per variable this cell
+    // declares, which the cell fills in as it persists each value.
+    std::vector<void *> slots;
+    slots.reserve(sessionVars.size() + cell->newVars.size());
+    for (const SessionVar &sessionVar : sessionVars)
+      slots.push_back(sessionVar.storage);
+    slots.resize(sessionVars.size() + cell->newVars.size(), nullptr);
+
     llvm::CrashRecoveryContext crashRecovery;
     crashRecovery.Enable();
     RuntimeCallbackScope callbackScope(options);
-    bool executed =
-        crashRecovery.RunSafely([&] { functionOr->invoke<void>(); });
+    bool executed = crashRecovery.RunSafely(
+        [&] { functionOr->invoke<void, void *>(slots.data()); });
     if (!executed) {
       result.diagnostics.push_back(
           {xmojo::DiagnosticSeverity::Error, "Mojo cell execution crashed"});
@@ -281,6 +294,20 @@ public:
       return result;
     }
 
+    // Adopt the cell's variables only now that it has run: a cell that failed
+    // to compile or raised leaves the session's variables untouched. A name
+    // declared again replaces its entry, keeping its argument position.
+    for (size_t index = 0; index < cell->newVars.size(); ++index) {
+      const InteractiveParser::PersistentVar &newVar = cell->newVars[index];
+      void *storage = slots[sessionVars.size() + index];
+      auto existing = llvm::find_if(sessionVars, [&](const SessionVar &var) {
+        return var.name == newVar.name;
+      });
+      if (existing != sessionVars.end())
+        *existing = SessionVar{newVar.name, newVar.type, storage};
+      else
+        sessionVars.push_back({newVar.name, newVar.type, storage});
+    }
     interactiveParser->commit(*cell);
     result.succeeded = true;
     return result;
@@ -425,6 +452,14 @@ private:
   std::string ownedObjectCache;
   std::unique_ptr<ObjectCompiler> objectCompiler;
   std::unique_ptr<ExecutionEngine> executionEngine;
+  /// One live top-level `var`, with the storage the cell that declared it
+  /// allocated. Entries keep their position: it is the cell argument order.
+  struct SessionVar {
+    std::string name;
+    mlir::Type type;
+    void *storage = nullptr;
+  };
+  std::vector<SessionVar> sessionVars;
   size_t nextCellID = 1;
   bool runtimeSymbolsDefined = false;
 };

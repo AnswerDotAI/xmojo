@@ -14,6 +14,7 @@
 #include "InteractiveParser.h"
 #include "xmojo/InteractiveSession.h"
 
+#include "KGEN/KGENDialect/KGENDialect.h"
 #include "KGEN/LITDialect/LITOps.h"
 #include "KGEN/MojoParser/ASTDecl.h"
 #include "KGEN/MojoParser/DeclResolver.h"
@@ -21,6 +22,7 @@
 #include "KGEN/MojoParser/ExprNode.h"
 #include "KGEN/MojoParser/Lexer.h"
 #include "KGEN/MojoParser/SharedState.h"
+#include "KGEN/MojoParser/IRValues.h"
 #include "KGEN/MojoTooling/ParserDriver.h"
 #include "KGEN/MojoTooling/CodeComplete.h"
 #include "KGEN/MojoTooling/PublicASTDecl.h"
@@ -30,6 +32,7 @@
 #include "mlir/IR/BuiltinAttributes.h"
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/ADT/StringMap.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/SourceMgr.h"
 
@@ -477,18 +480,57 @@ void emitMappedLine(llvm::raw_string_ostream &output, CellSourceMap &map,
   emitSource(lineEnd);
 }
 
+/// The name bound by a top-level `var` statement, or empty for any other line.
+StringRef declaredVarName(StringRef line) {
+  if (!line.consume_front("var "))
+    return {};
+  line = line.ltrim();
+  size_t end = 0;
+  while (end < line.size() &&
+         (llvm::isAlnum(static_cast<unsigned char>(line[end])) ||
+          line[end] == '_'))
+    ++end;
+  return line.take_front(end);
+}
+
+/// The generated alias naming a persistent variable's type. Cells refer to the
+/// type only through this name: printing a type back to Mojo source is not
+/// guaranteed to produce something the parser accepts.
+std::string persistentTypeName(StringRef name) {
+  return ("__xmojo_var_type_" + name).str();
+}
+
 WrappedCell wrapCell(StringRef source, const llvm::MemoryBuffer *sourceBuffer,
-                     SharedState &state, StringRef functionName) {
+                     SharedState &state, StringRef functionName,
+                     ArrayRef<xmojo::InteractiveParser::PersistentVar> sessionVars,
+                     SmallVectorImpl<std::string> &declaredVars) {
   SmallVector<StringRef> topLevel;
   SmallVector<StringRef> body;
   partitionCell(source, topLevel, body);
   std::optional<TrailingExpression> trailing =
       findTrailingExpression(state, sourceBuffer);
 
+  for (StringRef line : body) {
+    if (isIndented(line))
+      continue;
+    StringRef name = declaredVarName(line);
+    if (!name.empty() && !llvm::is_contained(declaredVars, name))
+      declaredVars.push_back(name.str());
+  }
+
   WrappedCell wrapped;
   llvm::raw_string_ostream output(wrapped.source);
-  output << "def " << functionName << "():\n"
-         << "  try:\n";
+  output << "def " << functionName << "(__xmojo_slots: __xmojo_cell_slots):\n";
+  // Bind each session variable to its storage before the try block: the
+  // reference is then always initialized, whatever the body raises.
+  for (size_t index = 0; index < sessionVars.size(); ++index) {
+    StringRef name = sessionVars[index].name;
+    if (llvm::is_contained(declaredVars, name))
+      continue;
+    output << "  ref `" << name << "` = __xmojo_slots[unsafe_offset=" << index
+           << "].unsafe_bitcast[" << persistentTypeName(name) << "]()[]\n";
+  }
+  output << "  try:\n";
   if (body.empty()) {
     output << "    pass\n";
   } else {
@@ -497,6 +539,13 @@ WrappedCell wrapCell(StringRef source, const llvm::MemoryBuffer *sourceBuffer,
       emitMappedLine(output, wrapped.map, line, trailing);
       output << '\n';
     }
+  }
+  // Move each newly declared variable into session storage, still inside the
+  // try block so a raising cell persists nothing.
+  for (size_t index = 0; index < declaredVars.size(); ++index) {
+    output << "    __xmojo_cell_persist(__xmojo_slots, "
+           << (sessionVars.size() + index) << ", `" << declaredVars[index]
+           << "`^)\n";
   }
   output << "  except error:\n"
          << "    __xmojo_cell_error(error)\n\n";
@@ -508,6 +557,9 @@ WrappedCell wrapCell(StringRef source, const llvm::MemoryBuffer *sourceBuffer,
   if (trailing)
     output << "from xmojo import __xmojo_display as "
               "__xmojo_cell_display\n";
+  if (!declaredVars.empty())
+    output << "from xmojo import __xmojo_persist as __xmojo_cell_persist\n";
+  output << "from xmojo import __xmojo_slot_array as __xmojo_cell_slots\n";
   output << "from xmojo import __xmojo_error as __xmojo_cell_error\n";
   output.flush();
   return wrapped;
@@ -515,12 +567,28 @@ WrappedCell wrapCell(StringRef source, const llvm::MemoryBuffer *sourceBuffer,
 
 ASTDecl &buildModule(const llvm::MemoryBuffer *sourceBuffer,
                      StringRef moduleName, SharedState &state,
-                     M::MojoASTDeclRef previous) {
+                     M::MojoASTDeclRef previous,
+                     ArrayRef<xmojo::InteractiveParser::PersistentVar> sessionVars) {
   MLIRContext *context = state.getContext();
   auto location =
       FileLineColLoc::get(context, sourceBuffer->getBufferIdentifier(), 1, 1);
   ASTDecl &module = state.createModule(moduleName, sourceBuffer, location);
   (void)state.declResolver->resolveBody(module, module.getLoc());
+
+  // Name each session variable's type with a generated alias bound to the
+  // compiler's own type handle, so the cell source never has to spell it.
+  for (const xmojo::InteractiveParser::PersistentVar &sessionVar : sessionVars) {
+    (void)state.resolveDeclReferencesIn(llvm::SMLoc(), sessionVar.type);
+    std::string typeName = persistentTypeName(sessionVar.name);
+    M::KGEN::LIT::PValue typeValue(sessionVar.type);
+    mlir::OpBuilder builder = module.getDeclEndBuilder();
+    auto typeDecl = M::KGEN::LIT::AliasDeclOp::create(
+        builder, builder.getUnknownLoc(),
+        M::KGEN::ParamDeclAttr::get(typeName, typeValue.getType()),
+        typeValue.get());
+    state.declResolver->addFullyResolvedDecl(&*typeDecl, typeName,
+                                             llvm::SMLoc(), &module);
+  }
 
   if (previous) {
     SmallVector<
@@ -552,6 +620,32 @@ ASTDecl &buildModule(const llvm::MemoryBuffer *sourceBuffer,
 ASTDecl *lookupSingleDeclaration(ASTDecl &scope, StringRef name) {
   auto declarations = scope.lookupInCurrentScope(name);
   return declarations.size() == 1 ? declarations.front() : nullptr;
+}
+
+/// Pair each name the cell declared with the type the compiler resolved for
+/// it, keeping the wrapper's persist order. Returns false when a declared name
+/// has no variable in the parsed body, which would misalign the slots.
+bool collectDeclaredVarTypes(
+    ASTDecl &entryPoint, ArrayRef<std::string> declaredVars,
+    std::vector<xmojo::InteractiveParser::PersistentVar> &newVars) {
+  auto entryFunction = llvm::dyn_cast_or_null<FnOp>(entryPoint.getIfOperation());
+  if (!entryFunction)
+    return false;
+
+  llvm::StringMap<mlir::Type> resolved;
+  entryFunction->walk([&](M::KGEN::LIT::VarDeclOp varOp) {
+    StringRef name = varOp.getNameAttr().strref();
+    if (llvm::is_contained(declaredVars, name))
+      resolved.try_emplace(name, varOp.getType().getElementType());
+  });
+
+  for (const std::string &name : declaredVars) {
+    auto entry = resolved.find(name);
+    if (entry == resolved.end())
+      return false;
+    newVars.push_back({name, entry->second});
+  }
+  return true;
 }
 
 class REPLListener final : public M::MojoParserREPLListener {
@@ -717,6 +811,7 @@ public:
 
   std::optional<Cell> parse(StringRef source, StringRef moduleName,
                             StringRef functionName,
+                            ArrayRef<PersistentVar> sessionVars,
                             std::vector<Diagnostic> &diagnostics) {
     unsigned sourceID = sourceManager.AddNewSourceBuffer(
         llvm::MemoryBuffer::getMemBufferCopy(source, moduleName),
@@ -725,8 +820,10 @@ public:
         sourceManager.getMemoryBuffer(sourceID);
 
     SharedState &state = parserContext.getSharedState();
-    WrappedCell wrapped = wrapCell(sourceBuffer->getBuffer(), sourceBuffer,
-                                   state, functionName);
+    SmallVector<std::string> declaredVars;
+    WrappedCell wrapped =
+        wrapCell(sourceBuffer->getBuffer(), sourceBuffer, state, functionName,
+                 sessionVars, declaredVars);
     auto wrappedBuffer = llvm::MemoryBuffer::getMemBufferCopy(
         wrapped.source, (moduleName + " wrapper").str());
     unsigned wrappedID = sourceManager.AddNewSourceBuffer(
@@ -748,9 +845,16 @@ public:
     sourceManager.setDiagHandler(
         [](const llvm::SMDiagnostic &diagnostic, void *context) {
           auto &handler = *static_cast<DiagnosticHandlerContext *>(context);
+          const CellSourceMap &map = *handler.parser->maps.back();
+          // Warnings about the generated wrapper describe code the user did
+          // not write and cannot act on, so report only the ones that land in
+          // the submitted cell. Errors always surface: an unmappable one is a
+          // bug in the wrapper worth seeing.
+          if (diagnostic.getKind() != llvm::SourceMgr::DK_Error &&
+              !map.mapLocation(diagnostic.getLoc()).isValid())
+            return;
           llvm::SMDiagnostic mapped =
-              handler.parser->maps.back()->mapDiagnostic(
-                  diagnostic, handler.parser->sourceManager);
+              map.mapDiagnostic(diagnostic, handler.parser->sourceManager);
           std::string message;
           llvm::raw_string_ostream stream(message);
           mapped.print("xmojo", stream, /*ShowColors=*/false,
@@ -764,7 +868,8 @@ public:
     auto restoreHandler = llvm::scope_exit(
         [&] { sourceManager.setDiagHandler(oldHandler, oldContext); });
 
-    ASTDecl &module = buildModule(buffer, moduleName, state, committedModule);
+    ASTDecl &module =
+        buildModule(buffer, moduleName, state, committedModule, sessionVars);
     state.diags.clear();
     if (emittedError)
       return std::nullopt;
@@ -775,8 +880,16 @@ public:
                              "interactive cell entry point was not produced"});
       return std::nullopt;
     }
-    return Cell{M::MojoASTDeclRef(&module), M::MojoASTDeclRef(entryPoint),
-                source.str(), moduleName.str()};
+
+    Cell cell{M::MojoASTDeclRef(&module), M::MojoASTDeclRef(entryPoint),
+              source.str(), moduleName.str(), {}};
+    if (!collectDeclaredVarTypes(*entryPoint, declaredVars, cell.newVars)) {
+      diagnostics.push_back(
+          {DiagnosticSeverity::Error,
+           "interactive cell declared a variable the compiler did not resolve"});
+      return std::nullopt;
+    }
+    return cell;
   }
 
   CompletionResult complete(StringRef source, size_t cursorPosition) {
@@ -810,8 +923,10 @@ xmojo::InteractiveParser::~InteractiveParser() = default;
 std::optional<xmojo::InteractiveParser::Cell>
 xmojo::InteractiveParser::parse(StringRef source, StringRef moduleName,
                                 StringRef functionName,
+                                ArrayRef<PersistentVar> sessionVars,
                                 std::vector<Diagnostic> &diagnostics) {
-  return impl->parse(source, moduleName, functionName, diagnostics);
+  return impl->parse(source, moduleName, functionName, sessionVars,
+                     diagnostics);
 }
 
 void xmojo::InteractiveParser::commit(const Cell &cell) {

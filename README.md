@@ -70,6 +70,8 @@ The current compiler and kernel PoC:
 
 - parses executable statements and top-level declarations in one cell;
 - resolves later cells against explicitly committed declaration history;
+- keeps a cell's top-level `var`s alive for later cells, which read and assign
+  them in place;
 - commits no history from a cell that fails parsing or compilation;
 - maps diagnostics from generated wrappers back to the submitted source;
 - executes uniquely named cell entry points in one ORC JITDylib;
@@ -86,9 +88,9 @@ The current compiler and kernel PoC:
   replies.
 
 It does not use Modular's LLDB-oriented REPL parser entry point, REPL context,
-or persistent-variable materializer. Persistent local values, typed expression
-history, binary rich-display buffers, display metadata, direct file-descriptor
-writes, interruption, and GPU execution are deliberately outside this PoC.
+or persistent-variable materializer. Typed expression history, binary
+rich-display buffers, display metadata, direct file-descriptor writes,
+interruption, and GPU execution are deliberately outside this PoC.
 
 Notebook code can opt into rich display without Python-style runtime
 reflection:
