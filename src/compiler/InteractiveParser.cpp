@@ -684,6 +684,21 @@ bool hasNonStaticOrigin(mlir::Type type) {
   return result;
 }
 
+std::string persistentVariableDeclaration(
+    const xmojo::InteractiveParser::PersistentVar &variable,
+    SharedState &state) {
+  return "var " + variable.name + ": " +
+         M::MojoASTTypeRef(variable.type).getAsString(state);
+}
+
+std::string persistentVariableMarkdown(
+    const xmojo::InteractiveParser::PersistentVar &variable,
+    SharedState &state) {
+  return "### variable `" + variable.name +
+         "`\n\n---\n\n###\n```mojo\n" +
+         persistentVariableDeclaration(variable, state) + "\n```";
+}
+
 class REPLListener final : public M::MojoParserREPLListener {
 public:
   void notifyWrappedExpr(StringRef) override {}
@@ -875,11 +890,8 @@ private:
     });
     if (variable == variables.end())
       return {};
-    std::string type = M::MojoASTTypeRef(variable->type).getAsString(
-        parserContext->getSharedState());
-    return {true, "### variable `" + variable->name +
-                      "`\n\n---\n\n###\n```mojo\nvar " + variable->name +
-                      ": " + type + "\n```"};
+    return {true, persistentVariableMarkdown(
+                      *variable, parserContext->getSharedState())};
   }
 
   llvm::SourceMgr sourceManager;
@@ -1013,8 +1025,13 @@ public:
             return item.label == variable.name;
           }))
         continue;
-      result.items.push_back(
-          {variable.name, std::string(), CompletionKind::Variable});
+      std::string signature = persistentVariableDeclaration(
+          variable, parserContext.getSharedState());
+      result.items.push_back({variable.name,
+                              persistentVariableMarkdown(
+                                  variable, parserContext.getSharedState()),
+                              CompletionKind::Variable,
+                              std::move(signature)});
     }
     return result;
   }

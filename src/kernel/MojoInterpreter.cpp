@@ -164,7 +164,7 @@ nl::json MojoInterpreter::complete_request_impl(const std::string &code,
                         {"end", cursorEnd},
                         {"text", item.label},
                         {"type", completionKindName(item.kind)},
-                        {"signature", ""}});
+                        {"signature", item.signature}});
   }
   nl::json metadata = {{"_jupyter_types_experimental", std::move(detailed)}};
   return xeus::create_complete_reply(matches, cursorStart, cursorEnd, metadata);
