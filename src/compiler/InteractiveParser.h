@@ -8,6 +8,7 @@
 #define XMOJO_INTERACTIVEPARSER_H
 
 #include "KGEN/MojoTooling/PublicASTDecl.h"
+#include "mlir/IR/Types.h"
 #include "llvm/ADT/StringRef.h"
 
 #include <memory>
@@ -38,11 +39,18 @@ struct CompletenessResult;
 /// history. Parsing a cell never changes the history until commit is called.
 class InteractiveParser {
 public:
+  /// One top-level interactive variable and its compiler-resolved type.
+  struct PersistentVar {
+    std::string name;
+    mlir::Type type;
+  };
+
   struct Cell {
     M::MojoASTDeclRef moduleDecl;
     M::MojoASTDeclRef entryPointDecl;
     std::string source;
     std::string moduleName;
+    std::vector<PersistentVar> newVars;
   };
 
   InteractiveParser(mlir::MLIRContext &context,
@@ -57,6 +65,7 @@ public:
                             llvm::StringRef functionName,
                             std::vector<Diagnostic> &diagnostics);
   void commit(const Cell &cell);
+  void activateVariables(const Cell &cell);
 
   CompletionResult complete(llvm::StringRef source, size_t cursorPosition);
   InspectionResult inspect(llvm::StringRef source, size_t cursorPosition);

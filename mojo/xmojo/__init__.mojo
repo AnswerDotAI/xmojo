@@ -15,5 +15,7 @@ from std.xmojo import (
     SVGRepr,
     __xmojo_display,
     __xmojo_error,
+    __xmojo_persist,
+    __xmojo_slot_array,
     display,
 )

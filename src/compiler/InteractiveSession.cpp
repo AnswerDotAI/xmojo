@@ -52,6 +52,9 @@ thread_local OutputCallback *activeOutput = nullptr;
 thread_local DisplayCallback *activeDisplay = nullptr;
 thread_local std::optional<DisplayEvent> pendingDisplay;
 thread_local std::optional<RuntimeError> pendingRuntimeError;
+using PersistentDestroy = void (*)(void *);
+thread_local std::vector<PersistentDestroy> *activePersistentDestroyers =
+    nullptr;
 
 void writeAll(int fileDescriptor, const char *data, size_t size) {
   while (size != 0) {
@@ -84,6 +87,12 @@ extern "C" void xmojo_emit_error(const char *message, size_t messageSize,
       std::string(message, messageSize),
       stackTraceSize == 0 ? std::string()
                           : std::string(stackTrace, stackTraceSize)});
+}
+
+extern "C" void xmojo_register_persistent(size_t index,
+                                          PersistentDestroy destroy) {
+  if (activePersistentDestroyers && index < activePersistentDestroyers->size())
+    (*activePersistentDestroyers)[index] = destroy;
 }
 
 extern "C" void xmojo_display_begin(int32_t kind) {
@@ -126,19 +135,24 @@ extern "C" void xmojo_display_end() {
 
 class RuntimeCallbackScope {
 public:
-  explicit RuntimeCallbackScope(SessionOptions &options)
+  explicit RuntimeCallbackScope(
+      SessionOptions &options,
+      std::vector<PersistentDestroy> *persistentDestroyers = nullptr)
       : previousOutput(activeOutput), previousDisplay(activeDisplay),
         previousPendingDisplay(std::move(pendingDisplay)),
-        previousRuntimeError(std::move(pendingRuntimeError)) {
+        previousRuntimeError(std::move(pendingRuntimeError)),
+        previousPersistentDestroyers(activePersistentDestroyers) {
     OutputCallback &output = options.output;
     activeOutput = output ? &output : nullptr;
     DisplayCallback &display = options.display;
     activeDisplay = display ? &display : nullptr;
+    activePersistentDestroyers = persistentDestroyers;
     pendingDisplay.reset();
     pendingRuntimeError.reset();
   }
 
   ~RuntimeCallbackScope() {
+    activePersistentDestroyers = previousPersistentDestroyers;
     pendingRuntimeError = std::move(previousRuntimeError);
     pendingDisplay = std::move(previousPendingDisplay);
     activeDisplay = previousDisplay;
@@ -150,6 +164,7 @@ private:
   DisplayCallback *previousDisplay;
   std::optional<DisplayEvent> previousPendingDisplay;
   std::optional<RuntimeError> previousRuntimeError;
+  std::vector<PersistentDestroy> *previousPersistentDestroyers;
 };
 
 void initializeTargets() {
@@ -182,6 +197,8 @@ public:
       return error.takeError();
     return std::move(impl);
   }
+
+  ~Impl() { destroyVariables(); }
 
   ErrorOr<ExecutionResult> execute(StringRef source) {
     if (!usable)
@@ -279,11 +296,18 @@ public:
     // match that state before running executable statements, which may raise.
     interactiveParser->commit(*cell);
 
+    std::vector<void *> slots;
+    slots.reserve(sessionVars.size() + cell->newVars.size());
+    for (const SessionVar &variable : sessionVars)
+      slots.push_back(variable.storage);
+    slots.resize(sessionVars.size() + cell->newVars.size(), nullptr);
+    std::vector<PersistentDestroy> destroyers(slots.size(), nullptr);
+
     llvm::CrashRecoveryContext crashRecovery;
     crashRecovery.Enable();
-    RuntimeCallbackScope callbackScope(options);
-    bool executed =
-        crashRecovery.RunSafely([&] { functionOr->invoke<void>(); });
+    RuntimeCallbackScope callbackScope(options, &destroyers);
+    bool executed = crashRecovery.RunSafely(
+        [&] { functionOr->invoke<void, void *>(slots.data()); });
     if (!executed) {
       usable = false;
       return Error("Mojo cell execution crashed; restart the interactive "
@@ -295,6 +319,22 @@ public:
       return result;
     }
 
+    size_t firstNewSlot = sessionVars.size();
+    for (size_t index = 0; index < cell->newVars.size(); ++index) {
+      size_t slotIndex = firstNewSlot + index;
+      if (!slots[slotIndex] || !destroyers[slotIndex]) {
+        usable = false;
+        return Error(("persistent variable '" + cell->newVars[index].name +
+                      "' did not initialize its " +
+                      (!slots[slotIndex] ? "storage" : "destructor") +
+                      "; restart the interactive session")
+                         .c_str());
+      }
+      const auto &variable = cell->newVars[index];
+      sessionVars.push_back({variable.name, variable.type, slots[slotIndex],
+                             destroyers[slotIndex]});
+    }
+    interactiveParser->activateVariables(*cell);
     result.succeeded = true;
     return result;
   }
@@ -312,6 +352,13 @@ public:
   }
 
 private:
+  struct SessionVar {
+    std::string name;
+    mlir::Type type;
+    void *storage;
+    PersistentDestroy destroy;
+  };
+
   Impl(ContextRef runtimeContext, SessionOptions options)
       : runtimeContext(std::move(runtimeContext)), options(std::move(options)),
         mlirContext(MLIRContext::Threading::DISABLED) {}
@@ -387,6 +434,17 @@ private:
     }
   }
 
+  void destroyVariables() {
+    RuntimeCallbackScope callbackScope(options);
+    for (SessionVar &variable : llvm::reverse(sessionVars)) {
+      llvm::CrashRecoveryContext crashRecovery;
+      crashRecovery.Enable();
+      (void)crashRecovery.RunSafely(
+          [&] { variable.destroy(variable.storage); });
+    }
+    sessionVars.clear();
+  }
+
   ErrorOrSuccess defineRuntimeSymbols(StringRef libraryName) {
     llvm::orc::ExecutionSession &session =
         executionEngine->getExecutionSession();
@@ -406,6 +464,7 @@ private:
     };
     addSymbol("xmojo_emit_print", &xmojo_emit_print);
     addSymbol("xmojo_emit_error", &xmojo_emit_error);
+    addSymbol("xmojo_register_persistent", &xmojo_register_persistent);
     addSymbol("xmojo_display_begin", &xmojo_display_begin);
     addSymbol("xmojo_display_add", &xmojo_display_add);
     addSymbol("xmojo_display_end", &xmojo_display_end);
@@ -426,6 +485,7 @@ private:
   std::optional<TempDir> objectCache;
   std::unique_ptr<ObjectCompiler> objectCompiler;
   std::unique_ptr<ExecutionEngine> executionEngine;
+  std::vector<SessionVar> sessionVars;
   size_t nextCellID = 1;
   bool runtimeSymbolsDefined = false;
   bool usable = true;

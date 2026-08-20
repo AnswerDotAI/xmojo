@@ -7,6 +7,7 @@
 
 from std.collections import List
 from std.ffi import c_int, c_size_t, external_call
+from std.memory import MutOpaquePointer, OwnedPointer, Pointer
 
 
 trait HTMLRepr:
@@ -147,3 +148,32 @@ def __xmojo_error(error: Error):
             "".ptr(),
             c_size_t(0),
         )
+
+
+comptime __xmojo_slot_array = Pointer[
+    MutOpaquePointer[MutUntrackedOrigin], MutUntrackedOrigin
+]
+"""One session-owned pointer per persistent interactive variable."""
+
+comptime _xmojo_destroy_fn = def(MutOpaquePointer[MutUntrackedOrigin]) thin abi(
+    "C"
+) -> None
+
+
+def _destroy_persistent[
+    T: Movable & Deinitable
+](storage: MutOpaquePointer[MutUntrackedOrigin],) abi("C"):
+    _ = OwnedPointer[T](unsafe_from_opaque_pointer=storage)
+
+
+def __xmojo_persist[
+    T: Movable & Deinitable
+](slots: __xmojo_slot_array, index: Int, var value: T):
+    """Move a completed cell's top-level variable into session storage."""
+    var owned = OwnedPointer(value^)
+    var storage = owned^.unsafe_take_allocation().unsafe_leak()
+    slots[unsafe_offset=index] = storage.unsafe_bitcast[NoneType]()
+    var destroy: _xmojo_destroy_fn = _destroy_persistent[T]
+    external_call["xmojo_register_persistent", NoneType](
+        c_size_t(index), destroy
+    )

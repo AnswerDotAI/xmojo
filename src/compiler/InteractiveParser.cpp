@@ -14,11 +14,13 @@
 #include "InteractiveParser.h"
 #include "xmojo/InteractiveSession.h"
 
+#include "KGEN/KGENDialect/KGENDialect.h"
 #include "KGEN/LITDialect/LITOps.h"
 #include "KGEN/MojoParser/ASTDecl.h"
 #include "KGEN/MojoParser/DeclResolver.h"
 #include "KGEN/MojoParser/EntryPoint.h"
 #include "KGEN/MojoParser/ExprNode.h"
+#include "KGEN/MojoParser/IRValues.h"
 #include "KGEN/MojoParser/Lexer.h"
 #include "KGEN/MojoParser/SharedState.h"
 #include "KGEN/MojoTooling/CodeComplete.h"
@@ -30,6 +32,7 @@
 #include "mlir/IR/BuiltinAttributes.h"
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/ADT/StringMap.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/SourceMgr.h"
 
@@ -476,8 +479,56 @@ void emitMappedLine(llvm::raw_string_ostream &output, CellSourceMap &map,
   emitSource(lineEnd);
 }
 
-WrappedCell wrapCell(StringRef source, const llvm::MemoryBuffer *sourceBuffer,
-                     SharedState &state, StringRef functionName) {
+SmallVector<std::string> findTopLevelVariables(SharedState &state,
+                                               const llvm::MemoryBuffer *buf) {
+  size_t baseIndent = std::numeric_limits<size_t>::max();
+  for (Lexer lexer(state.diags, buf); !lexer.getToken().is(Token::eof);
+       lexer.lexToken()) {
+    if (auto indent = lexer.getToken().getIndentation())
+      baseIndent = std::min(baseIndent, *indent);
+  }
+  if (baseIndent == std::numeric_limits<size_t>::max())
+    return {};
+
+  SmallVector<std::string> variables;
+  SmallVector<Token::Kind> openBrackets;
+  bool statementAtBase = false;
+  bool afterSemicolon = false;
+  bool expectName = false;
+  for (Lexer lexer(state.diags, buf); !lexer.getToken().is(Token::eof);
+       lexer.lexToken()) {
+    const Token &token = lexer.getToken();
+    if (token.isStartOfLine())
+      statementAtBase = token.getIndentation() == baseIndent;
+
+    bool statementStart = token.isStartOfLine() || afterSemicolon;
+    afterSemicolon = false;
+    if (expectName) {
+      if (token.isIdentifier() &&
+          !llvm::is_contained(variables, token.getSpelling()))
+        variables.push_back(token.getSpelling().str());
+      expectName = false;
+    } else if (statementStart && statementAtBase && openBrackets.empty() &&
+               token.is(Token::kw_var)) {
+      expectName = true;
+    }
+
+    updateBrackets(token, openBrackets);
+    if (openBrackets.empty() && token.is(Token::semi))
+      afterSemicolon = true;
+  }
+  return variables;
+}
+
+std::string persistentTypeName(size_t index) {
+  return ("__xmojo_var_type_" + llvm::Twine(index)).str();
+}
+
+WrappedCell
+wrapCell(StringRef source, const llvm::MemoryBuffer *sourceBuffer,
+         SharedState &state, StringRef functionName,
+         ArrayRef<xmojo::InteractiveParser::PersistentVar> sessionVars,
+         ArrayRef<std::string> declaredVars) {
   SmallVector<StringRef> topLevel;
   SmallVector<StringRef> body;
   partitionCell(source, topLevel, body);
@@ -486,8 +537,13 @@ WrappedCell wrapCell(StringRef source, const llvm::MemoryBuffer *sourceBuffer,
 
   WrappedCell wrapped;
   llvm::raw_string_ostream output(wrapped.source);
-  output << "def " << functionName << "():\n"
-         << "  try:\n";
+  output << "def " << functionName << "(__xmojo_slots: __xmojo_cell_slots):\n";
+  for (size_t index = 0; index < sessionVars.size(); ++index) {
+    output << "  ref `" << sessionVars[index].name
+           << "` = __xmojo_slots[unsafe_offset=" << index << "].unsafe_bitcast["
+           << persistentTypeName(index) << "]()[]\n";
+  }
+  output << "  try:\n";
   if (body.empty()) {
     output << "    pass\n";
   } else {
@@ -496,6 +552,11 @@ WrappedCell wrapCell(StringRef source, const llvm::MemoryBuffer *sourceBuffer,
       emitMappedLine(output, wrapped.map, line, trailing);
       output << '\n';
     }
+  }
+  for (size_t index = 0; index < declaredVars.size(); ++index) {
+    output << "    __xmojo_cell_persist(__xmojo_slots, "
+           << (sessionVars.size() + index) << ", `" << declaredVars[index]
+           << "`^)\n";
   }
   output << "  except error:\n"
          << "    __xmojo_cell_error(error)\n\n";
@@ -507,19 +568,38 @@ WrappedCell wrapCell(StringRef source, const llvm::MemoryBuffer *sourceBuffer,
   if (trailing)
     output << "from xmojo import __xmojo_display as "
               "__xmojo_cell_display\n";
+  if (!declaredVars.empty())
+    output << "from xmojo import __xmojo_persist as "
+              "__xmojo_cell_persist\n";
+  output << "from xmojo import __xmojo_slot_array as __xmojo_cell_slots\n";
   output << "from xmojo import __xmojo_error as __xmojo_cell_error\n";
   output.flush();
   return wrapped;
 }
 
-ASTDecl &buildModule(const llvm::MemoryBuffer *sourceBuffer,
-                     StringRef moduleName, SharedState &state,
-                     M::MojoASTDeclRef previous) {
+ASTDecl &
+buildModule(const llvm::MemoryBuffer *sourceBuffer, StringRef moduleName,
+            SharedState &state, M::MojoASTDeclRef previous,
+            ArrayRef<xmojo::InteractiveParser::PersistentVar> sessionVars) {
   MLIRContext *context = state.getContext();
   auto location =
       FileLineColLoc::get(context, sourceBuffer->getBufferIdentifier(), 1, 1);
   ASTDecl &module = state.createModule(moduleName, sourceBuffer, location);
   (void)state.declResolver->resolveBody(module, module.getLoc());
+
+  for (size_t index = 0; index < sessionVars.size(); ++index) {
+    const auto &sessionVar = sessionVars[index];
+    (void)state.resolveDeclReferencesIn(llvm::SMLoc(), sessionVar.type);
+    M::KGEN::LIT::PValue typeValue(sessionVar.type);
+    mlir::OpBuilder builder = module.getDeclEndBuilder();
+    auto typeDecl = M::KGEN::LIT::AliasDeclOp::create(
+        builder, builder.getUnknownLoc(),
+        M::KGEN::ParamDeclAttr::get(persistentTypeName(index),
+                                    typeValue.getType()),
+        typeValue.get());
+    state.declResolver->addFullyResolvedDecl(
+        &*typeDecl, persistentTypeName(index), llvm::SMLoc(), &module);
+  }
 
   if (previous) {
     SmallVector<
@@ -551,6 +631,29 @@ ASTDecl &buildModule(const llvm::MemoryBuffer *sourceBuffer,
 ASTDecl *lookupSingleDeclaration(ASTDecl &scope, StringRef name) {
   auto declarations = scope.lookupInCurrentScope(name);
   return declarations.size() == 1 ? declarations.front() : nullptr;
+}
+
+bool collectDeclaredVarTypes(
+    ASTDecl &entryPoint, ArrayRef<std::string> declaredVars,
+    std::vector<xmojo::InteractiveParser::PersistentVar> &newVars) {
+  auto entryFunction =
+      llvm::dyn_cast_or_null<FnOp>(entryPoint.getIfOperation());
+  if (!entryFunction)
+    return false;
+
+  llvm::StringMap<mlir::Type> resolved;
+  entryFunction->walk([&](M::KGEN::LIT::VarDeclOp varOp) {
+    StringRef name = varOp.getNameAttr().strref();
+    if (llvm::is_contained(declaredVars, name))
+      resolved.try_emplace(name, varOp.getType().getElementType());
+  });
+  for (const std::string &name : declaredVars) {
+    auto entry = resolved.find(name);
+    if (entry == resolved.end())
+      return false;
+    newVars.push_back({name, entry->second});
+  }
+  return true;
 }
 
 class REPLListener final : public M::MojoParserREPLListener {
@@ -619,15 +722,19 @@ public:
         std::make_unique<M::MojoParserContext>(sourceManager, parserConfig);
   }
 
-  void record(StringRef source, StringRef moduleName) {
+  void record(StringRef source, StringRef moduleName,
+              ArrayRef<xmojo::InteractiveParser::PersistentVar> variables) {
     unsigned id = sourceManager.AddNewSourceBuffer(
         llvm::MemoryBuffer::getMemBufferCopy(source, moduleName),
         llvm::SMLoc());
+    auto types = variableTypes(variables);
     (void)parserContext->parseREPLExpression(replListener, id,
-                                             "__xmojo_tooling_cell", {});
+                                             "__xmojo_tooling_cell", types);
   }
 
-  CompletionResult complete(StringRef source, size_t cursorPosition) {
+  CompletionResult
+  complete(StringRef source, size_t cursorPosition,
+           ArrayRef<xmojo::InteractiveParser::PersistentVar> variables) {
     cursorPosition = std::min(cursorPosition, source.size());
     CompletionResult result;
     result.cursorEnd = cursorPosition;
@@ -636,8 +743,9 @@ public:
            isCompletionCharacter(source[result.cursorStart - 1]))
       --result.cursorStart;
 
-    auto completions =
-        parserContext->codeCompleteREPLExpression(source, cursorPosition, {});
+    auto types = variableTypes(variables);
+    auto completions = parserContext->codeCompleteREPLExpression(
+        source, cursorPosition, types);
     result.items.reserve(completions.size());
     for (auto &completion : completions) {
       result.items.push_back({std::move(completion.label),
@@ -647,7 +755,9 @@ public:
     return result;
   }
 
-  InspectionResult inspect(StringRef source, size_t cursorPosition) {
+  InspectionResult
+  inspect(StringRef source, size_t cursorPosition,
+          ArrayRef<xmojo::InteractiveParser::PersistentVar> variables) {
     InspectionResult result;
     if (cursorPosition > source.size())
       return result;
@@ -658,8 +768,9 @@ public:
         llvm::MemoryBuffer::getMemBufferCopy(source, "Mojo inspection"),
         llvm::SMLoc());
     const llvm::MemoryBuffer *buffer = sourceManager.getMemoryBuffer(id);
+    auto types = variableTypes(variables);
     auto parsed = parserContext->parseREPLExpression(
-        replListener, id, "__xmojo_inspection_cell", {});
+        replListener, id, "__xmojo_inspection_cell", types);
     references.collecting = false;
     if (!parsed.isValid())
       return result;
@@ -688,6 +799,15 @@ public:
   }
 
 private:
+  static SmallVector<std::pair<StringRef, mlir::Type>>
+  variableTypes(ArrayRef<xmojo::InteractiveParser::PersistentVar> variables) {
+    SmallVector<std::pair<StringRef, mlir::Type>> result;
+    result.reserve(variables.size());
+    for (const auto &variable : variables)
+      result.push_back({variable.name, variable.type});
+    return result;
+  }
+
   static bool isCompletionCharacter(char character) {
     return llvm::isAlnum(static_cast<unsigned char>(character)) ||
            character == '_' || character == '$';
@@ -722,8 +842,23 @@ public:
         sourceManager.getMemoryBuffer(sourceID);
 
     SharedState &state = parserContext.getSharedState();
+    SmallVector<std::string> declaredVars =
+        findTopLevelVariables(state, sourceBuffer);
+    for (const std::string &declared : declaredVars) {
+      if (llvm::none_of(persistentVars, [&](const PersistentVar &variable) {
+            return variable.name == declared;
+          }))
+        continue;
+      diagnostics.push_back(
+          {DiagnosticSeverity::Error,
+           ("persistent variable '" + declared +
+            "' is already declared; assign to it without 'var'")});
+      return std::nullopt;
+    }
+
     WrappedCell wrapped =
-        wrapCell(sourceBuffer->getBuffer(), sourceBuffer, state, functionName);
+        wrapCell(sourceBuffer->getBuffer(), sourceBuffer, state, functionName,
+                 persistentVars, declaredVars);
     auto wrappedBuffer = llvm::MemoryBuffer::getMemBufferCopy(
         wrapped.source, (moduleName + " wrapper").str());
     unsigned wrappedID = sourceManager.AddNewSourceBuffer(
@@ -745,9 +880,12 @@ public:
     sourceManager.setDiagHandler(
         [](const llvm::SMDiagnostic &diagnostic, void *context) {
           auto &handler = *static_cast<DiagnosticHandlerContext *>(context);
+          const CellSourceMap &map = *handler.parser->maps.back();
+          if (diagnostic.getKind() != llvm::SourceMgr::DK_Error &&
+              !map.mapLocation(diagnostic.getLoc()).isValid())
+            return;
           llvm::SMDiagnostic mapped =
-              handler.parser->maps.back()->mapDiagnostic(
-                  diagnostic, handler.parser->sourceManager);
+              map.mapDiagnostic(diagnostic, handler.parser->sourceManager);
           std::string message;
           llvm::raw_string_ostream stream(message);
           mapped.print("xmojo", stream, /*ShowColors=*/false,
@@ -761,7 +899,8 @@ public:
     auto restoreHandler = llvm::scope_exit(
         [&] { sourceManager.setDiagHandler(oldHandler, oldContext); });
 
-    ASTDecl &module = buildModule(buffer, moduleName, state, committedModule);
+    ASTDecl &module =
+        buildModule(buffer, moduleName, state, committedModule, persistentVars);
     state.diags.clear();
     if (emittedError)
       return std::nullopt;
@@ -772,16 +911,38 @@ public:
                              "interactive cell entry point was not produced"});
       return std::nullopt;
     }
-    return Cell{M::MojoASTDeclRef(&module), M::MojoASTDeclRef(entryPoint),
-                source.str(), moduleName.str()};
+    Cell cell{M::MojoASTDeclRef(&module),
+              M::MojoASTDeclRef(entryPoint),
+              source.str(),
+              moduleName.str(),
+              {}};
+    if (!collectDeclaredVarTypes(*entryPoint, declaredVars, cell.newVars)) {
+      diagnostics.push_back(
+          {DiagnosticSeverity::Error, "interactive cell declared a variable "
+                                      "the compiler did not resolve"});
+      return std::nullopt;
+    }
+    return cell;
   }
 
   CompletionResult complete(StringRef source, size_t cursorPosition) {
-    return tooling->complete(source, cursorPosition);
+    CompletionResult result =
+        tooling->complete(source, cursorPosition, persistentVars);
+    StringRef prefix = source.slice(result.cursorStart, result.cursorEnd);
+    for (const PersistentVar &variable : persistentVars) {
+      if (!StringRef(variable.name).starts_with(prefix) ||
+          llvm::any_of(result.items, [&](const auto &item) {
+            return item.label == variable.name;
+          }))
+        continue;
+      result.items.push_back(
+          {variable.name, std::string(), CompletionKind::Variable});
+    }
+    return result;
   }
 
   InspectionResult inspect(StringRef source, size_t cursorPosition) {
-    return tooling->inspect(source, cursorPosition);
+    return tooling->inspect(source, cursorPosition, persistentVars);
   }
 
   CompletenessResult isComplete(StringRef source) {
@@ -793,6 +954,7 @@ public:
   M::KGEN::LIT::ParserConfig parserConfig;
   M::MojoParserContext parserContext;
   M::MojoASTDeclRef committedModule;
+  std::vector<PersistentVar> persistentVars;
   std::vector<std::unique_ptr<CellSourceMap>> maps;
   std::unique_ptr<ToolingState> tooling;
 };
@@ -813,7 +975,11 @@ xmojo::InteractiveParser::parse(StringRef source, StringRef moduleName,
 
 void xmojo::InteractiveParser::commit(const Cell &cell) {
   impl->committedModule = cell.moduleDecl;
-  impl->tooling->record(cell.source, cell.moduleName);
+  impl->tooling->record(cell.source, cell.moduleName, impl->persistentVars);
+}
+
+void xmojo::InteractiveParser::activateVariables(const Cell &cell) {
+  llvm::append_range(impl->persistentVars, cell.newVars);
 }
 
 CompletionResult xmojo::InteractiveParser::complete(StringRef source,

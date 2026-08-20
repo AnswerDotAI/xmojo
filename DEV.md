@@ -11,6 +11,7 @@ InteractiveSession
 │   ├── cell source partitioning and location mapping
 │   ├── final-expression classification and display rewriting
 │   ├── chained declaration resolution
+│   ├── typed persistent-variable binding
 │   ├── explicit transactional history
 │   └── completion, inspection, and completeness tooling
 ├── ORC object compilation and execution
@@ -47,6 +48,20 @@ failures therefore cannot contribute names to later cells. An uncaught runtime
 `Error` does not roll back declarations already resident in ORC, mutations, or
 other side effects. Sessions share Modular's process-wide runtime context,
 while each owns its parser, MLIR context, ORC engine, and committed history.
+
+Successful top-level `var` declarations are moved at the cell epilogue into
+individually allocated `OwnedPointer` storage. The parser retains each resolved
+MLIR type and gives later cell wrappers mutable references through an opaque
+slot array; declarations emitted outside those wrappers cannot implicitly
+capture the references. Existing names cannot be redeclared or change type.
+Each specialization registers a C-ABI destructor with the session, which
+destroys values in reverse declaration order before ORC is torn down.
+
+Variable effects are sequential rather than transactional. Existing mutations
+completed before an uncaught `Error` remain visible, while variables declared
+by that raising cell stay ordinary locals and unwind because the persistence
+epilogue was not reached. Compilation failures execute nothing and therefore
+change no variable state.
 
 The cell wrapper asks Mojo's parser whether the final top-level simple
 statement is a value expression. If so, source-map-aware rewriting wraps that
