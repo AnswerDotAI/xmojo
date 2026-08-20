@@ -21,8 +21,8 @@
 #include "KGEN/MojoParser/ExprNode.h"
 #include "KGEN/MojoParser/Lexer.h"
 #include "KGEN/MojoParser/SharedState.h"
-#include "KGEN/MojoTooling/ParserDriver.h"
 #include "KGEN/MojoTooling/CodeComplete.h"
+#include "KGEN/MojoTooling/ParserDriver.h"
 #include "KGEN/MojoTooling/PublicASTDecl.h"
 #include "KGEN/lib/MojoParser/ParserBase.h"
 #include "Support/Compiler/Diags.h"
@@ -52,10 +52,10 @@ using M::KGEN::LIT::SharedState;
 using M::KGEN::LIT::Token;
 using mlir::FileLineColLoc;
 using mlir::MLIRContext;
-using xmojo::CompletionKind;
-using xmojo::CompletionResult;
 using xmojo::CompletenessResult;
 using xmojo::CompletenessStatus;
+using xmojo::CompletionKind;
+using xmojo::CompletionResult;
 using xmojo::InspectionResult;
 
 namespace {
@@ -288,8 +288,8 @@ void updateBrackets(const Token &token, SmallVectorImpl<Token::Kind> &open) {
   }
 }
 
-std::optional<LexerCursor> findTrailingStatement(SharedState &state,
-                                                 const llvm::MemoryBuffer *buf) {
+std::optional<LexerCursor>
+findTrailingStatement(SharedState &state, const llvm::MemoryBuffer *buf) {
   size_t baseIndent = std::numeric_limits<size_t>::max();
   for (Lexer lexer(state.diags, buf); !lexer.getToken().is(Token::eof);
        lexer.lexToken()) {
@@ -413,8 +413,7 @@ CompletenessResult checkCompleteness(SharedState &state,
 
   if (invalid)
     return {CompletenessStatus::Invalid, {}};
-  if (lexicalError || !openBrackets.empty() ||
-      requiresFollowingToken(lastKind))
+  if (lexicalError || !openBrackets.empty() || requiresFollowingToken(lastKind))
     return {CompletenessStatus::Incomplete, std::string(lineIndent + 2, ' ')};
   return {};
 }
@@ -436,8 +435,8 @@ findTrailingExpression(SharedState &state, const llvm::MemoryBuffer *buffer) {
   Lexer lexer(state.diags, *cursor);
   ExprNode *expression = nullptr;
   size_t indentation = cursor->getToken().getIndentation().value_or(0);
-  if (failed(ParserBase(state, lexer).parseSimpleStmtExprs(expression,
-                                                           indentation)) ||
+  if (failed(ParserBase(state, lexer)
+                 .parseSimpleStmtExprs(expression, indentation)) ||
       !expression || !lexer.getToken().is(Token::eof))
     return std::nullopt;
   if (expression->kind == ExprNode::kTypePattern ||
@@ -499,7 +498,7 @@ WrappedCell wrapCell(StringRef source, const llvm::MemoryBuffer *sourceBuffer,
     }
   }
   output << "  except error:\n"
-         << "    print(\"Error:\", error)\n\n";
+         << "    __xmojo_cell_error(error)\n\n";
 
   for (StringRef line : topLevel) {
     wrapped.map.add(line, output.str().size());
@@ -508,6 +507,7 @@ WrappedCell wrapCell(StringRef source, const llvm::MemoryBuffer *sourceBuffer,
   if (trailing)
     output << "from xmojo import __xmojo_display as "
               "__xmojo_cell_display\n";
+  output << "from xmojo import __xmojo_error as __xmojo_cell_error\n";
   output.flush();
   return wrapped;
 }
@@ -584,8 +584,8 @@ public:
   std::vector<Reference> references;
 };
 
-CompletionKind convertCompletionKind(
-    M::KGEN::Mojo::CodeCompletionResult::Kind kind) {
+CompletionKind
+convertCompletionKind(M::KGEN::Mojo::CodeCompletionResult::Kind kind) {
   using Kind = M::KGEN::Mojo::CodeCompletionResult::Kind;
   switch (kind) {
   case Kind::kPackage:
@@ -610,8 +610,7 @@ CompletionKind convertCompletionKind(
 
 class ToolingState {
 public:
-  ToolingState(MLIRContext &context,
-               const M::KGEN::CompilationOptions &options,
+  ToolingState(MLIRContext &context, const M::KGEN::CompilationOptions &options,
                ArrayRef<std::string> importPaths)
       : parserConfig(&context, options) {
     sourceManager.setIncludeDirs(importPaths);
@@ -624,8 +623,8 @@ public:
     unsigned id = sourceManager.AddNewSourceBuffer(
         llvm::MemoryBuffer::getMemBufferCopy(source, moduleName),
         llvm::SMLoc());
-    (void)parserContext->parseREPLExpression(
-        replListener, id, "__xmojo_tooling_cell", {});
+    (void)parserContext->parseREPLExpression(replListener, id,
+                                             "__xmojo_tooling_cell", {});
   }
 
   CompletionResult complete(StringRef source, size_t cursorPosition) {
@@ -637,8 +636,8 @@ public:
            isCompletionCharacter(source[result.cursorStart - 1]))
       --result.cursorStart;
 
-    auto completions = parserContext->codeCompleteREPLExpression(
-        source, cursorPosition, {});
+    auto completions =
+        parserContext->codeCompleteREPLExpression(source, cursorPosition, {});
     result.items.reserve(completions.size());
     for (auto &completion : completions) {
       result.items.push_back({std::move(completion.label),
@@ -710,8 +709,7 @@ public:
       : parserConfig(&context, options),
         parserContext(sourceManager, parserConfig) {
     sourceManager.setIncludeDirs(importPaths);
-    tooling =
-        std::make_unique<ToolingState>(context, options, importPaths);
+    tooling = std::make_unique<ToolingState>(context, options, importPaths);
   }
 
   std::optional<Cell> parse(StringRef source, StringRef moduleName,
@@ -724,8 +722,8 @@ public:
         sourceManager.getMemoryBuffer(sourceID);
 
     SharedState &state = parserContext.getSharedState();
-    WrappedCell wrapped = wrapCell(sourceBuffer->getBuffer(), sourceBuffer,
-                                   state, functionName);
+    WrappedCell wrapped =
+        wrapCell(sourceBuffer->getBuffer(), sourceBuffer, state, functionName);
     auto wrappedBuffer = llvm::MemoryBuffer::getMemBufferCopy(
         wrapped.source, (moduleName + " wrapper").str());
     unsigned wrappedID = sourceManager.AddNewSourceBuffer(
@@ -819,7 +817,7 @@ void xmojo::InteractiveParser::commit(const Cell &cell) {
 }
 
 CompletionResult xmojo::InteractiveParser::complete(StringRef source,
-                                                     size_t cursorPosition) {
+                                                    size_t cursorPosition) {
   return impl->complete(source, cursorPosition);
 }
 

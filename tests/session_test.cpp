@@ -43,8 +43,9 @@ struct CapturedOutput {
           stream == OutputStream::Stdout ? standardOutput : standardError;
       destination.append(text.data(), text.size());
     };
-    options.display =
-        [this](DisplayEvent event) { displays.push_back(std::move(event)); };
+    options.display = [this](DisplayEvent event) {
+      displays.push_back(std::move(event));
+    };
     return options;
   }
 };
@@ -92,6 +93,25 @@ testing::AssertionResult executionFailsWith(InteractiveSession &session,
   return testing::AssertionSuccess();
 }
 
+testing::AssertionResult runtimeFailsWith(InteractiveSession &session,
+                                          const std::string &source,
+                                          const std::string &expected) {
+  auto resultOr = session.execute(source);
+  if (resultOr.isError())
+    return testing::AssertionFailure()
+           << "compiler infrastructure failed: " << resultOr.getError();
+  if (resultOr->succeeded)
+    return testing::AssertionFailure() << "raising cell unexpectedly succeeded";
+  if (!resultOr->runtimeError)
+    return testing::AssertionFailure()
+           << "raising cell produced no runtime error";
+  if (resultOr->runtimeError->message.find(expected) == std::string::npos)
+    return testing::AssertionFailure()
+           << "expected runtime error containing '" << expected << "', got:\n"
+           << resultOr->runtimeError->message;
+  return testing::AssertionSuccess();
+}
+
 TEST(InteractiveSessionTest, RunsInteractiveSession) {
   CapturedOutput output;
   auto session = createSession(output.sessionOptions());
@@ -134,18 +154,17 @@ def answer() -> Int:
   auto completion = session->complete("ans", 3);
   EXPECT_EQ(completion.cursorStart, 0u);
   EXPECT_EQ(completion.cursorEnd, 3u);
-  auto answerCompletion = std::find_if(
-      completion.items.begin(), completion.items.end(),
-      [](const auto &item) { return item.label == "answer"; });
+  auto answerCompletion =
+      std::find_if(completion.items.begin(), completion.items.end(),
+                   [](const auto &item) { return item.label == "answer"; });
   ASSERT_NE(answerCompletion, completion.items.end());
   EXPECT_EQ(answerCompletion->kind, xmojo::CompletionKind::Function);
 
   auto memberCompletion = session->complete("Pair(1, 2).le", 13);
   EXPECT_EQ(memberCompletion.cursorStart, 11u);
   EXPECT_NE(std::find_if(memberCompletion.items.begin(),
-                         memberCompletion.items.end(), [](const auto &item) {
-                           return item.label == "left";
-                         }),
+                         memberCompletion.items.end(),
+                         [](const auto &item) { return item.label == "left"; }),
             memberCompletion.items.end());
 
   auto inspection = session->inspect("answer()", 3);
@@ -233,8 +252,7 @@ display(Bundled())
   ASSERT_EQ(output.displays.size(), 5u);
   EXPECT_EQ(output.displays[4].kind, DisplayKind::DisplayData);
   ASSERT_EQ(output.displays[4].data.size(), 2u);
-  EXPECT_EQ(output.displays[4].data[0].mimeType,
-            "application/x-xmojo-test");
+  EXPECT_EQ(output.displays[4].data[0].mimeType, "application/x-xmojo-test");
   EXPECT_EQ(output.displays[4].data[0].data, "structured");
   EXPECT_EQ(output.displays[4].data[1].mimeType, "text/plain");
   EXPECT_EQ(output.displays[4].data[1].data, "Bundled()");
@@ -248,8 +266,7 @@ MoveOnly(9)
 )"));
   ASSERT_EQ(output.displays.size(), 6u);
   EXPECT_EQ(output.displays[5].kind, DisplayKind::ExecuteResult);
-  EXPECT_EQ(output.displays[5].data[0].data,
-            "MoveOnly(value=Int(9))");
+  EXPECT_EQ(output.displays[5].data[0].data, "MoveOnly(value=Int(9))");
 
   ASSERT_TRUE(executionFailsWith(*session, R"(
 def rejected() -> Int:
@@ -261,23 +278,67 @@ var second = unknown_name
                                  "var second = unknown_name"));
   ASSERT_TRUE(executionFailsWith(*session, "print(rejected())\n", "rejected"));
 
+  ASSERT_TRUE(runtimeFailsWith(*session, R"(
+def survives_raise() -> Int:
+  return 123
+
+print("before raise")
+raise Error("kaboom")
+)",
+                               "kaboom"));
+  ASSERT_TRUE(executionSucceeds(*session, "print(survives_raise())\n"));
+
+  ASSERT_TRUE(executionSucceeds(*session, R"(
+try:
+  raise Error("caught")
+except error:
+  print(error)
+)"));
+
   EXPECT_TRUE(executionSucceeds(*session, "print(answer())\n"));
-  EXPECT_EQ(output.standardOutput, "6\n42\n7\n8\n" + longText + "\n42\n");
+  EXPECT_EQ(output.standardOutput,
+            "6\n42\n7\n8\n" + longText + "\nbefore raise\n123\ncaught\n42\n");
   EXPECT_EQ(output.standardError, "warning\n");
 }
 
 TEST(InteractiveSessionTest, IsolatesSessions) {
-  auto first = createSession();
-  auto second = createSession();
+  CapturedOutput firstOutput;
+  CapturedOutput secondOutput;
+  auto first = createSession(firstOutput.sessionOptions());
+  auto second = createSession(secondOutput.sessionOptions());
   ASSERT_NE(first, nullptr);
   ASSERT_NE(second, nullptr);
 
+  const char *sharedCell = R"(
+def shared_value() -> Int:
+  return 1
+)";
+  ASSERT_TRUE(executionSucceeds(*first, sharedCell));
+  ASSERT_TRUE(executionSucceeds(*second, sharedCell));
+  ASSERT_TRUE(executionSucceeds(*first, "print(shared_value())\n"));
+  ASSERT_TRUE(executionSucceeds(*second, "print(shared_value())\n"));
+  EXPECT_EQ(firstOutput.standardOutput, "1\n");
+  EXPECT_EQ(secondOutput.standardOutput, "1\n");
+
   ASSERT_TRUE(executionSucceeds(*first, R"(
 def only_in_first() -> Int:
-  return 1
+  return 2
 )"));
   EXPECT_TRUE(
       executionFailsWith(*second, "print(only_in_first())\n", "only_in_first"));
+}
+
+TEST(InteractiveSessionTest, NativeCrashPoisonsSession) {
+  auto session = createSession();
+  ASSERT_NE(session, nullptr);
+
+  auto crash = session->execute("from std.os import abort\nabort()\n");
+  ASSERT_TRUE(crash.isError());
+  EXPECT_NE(std::string(crash.getError()).find("restart"), std::string::npos);
+
+  auto retry = session->execute("42\n");
+  ASSERT_TRUE(retry.isError());
+  EXPECT_NE(std::string(retry.getError()).find("unusable"), std::string::npos);
 }
 
 } // namespace

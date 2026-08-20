@@ -18,20 +18,36 @@ using xmojo::InteractiveSession;
 
 namespace {
 
+enum class ExecutionStatus { Success, UserError, InfrastructureError };
+
 void printDiagnostics(const ExecutionResult &result) {
-  for (const Diagnostic &diagnostic : result.diagnostics)
+  for (const Diagnostic &diagnostic : result.diagnostics) {
     std::cerr << diagnostic.message;
+    if (diagnostic.message.empty() || diagnostic.message.back() != '\n')
+      std::cerr << '\n';
+  }
 }
 
-bool execute(InteractiveSession &session, const std::string &source) {
+ExecutionStatus execute(InteractiveSession &session,
+                        const std::string &source) {
   auto resultOr = session.execute(source);
   if (resultOr.isError()) {
     std::cerr << "mojoorc: " << resultOr.getError() << '\n';
-    return false;
+    return ExecutionStatus::InfrastructureError;
   }
 
   printDiagnostics(*resultOr);
-  return resultOr->succeeded;
+  if (resultOr->runtimeError) {
+    const auto &error = *resultOr->runtimeError;
+    std::cerr << "Error: " << error.message << '\n';
+    if (!error.stackTrace.empty()) {
+      std::cerr << error.stackTrace;
+      if (error.stackTrace.back() != '\n')
+        std::cerr << '\n';
+    }
+  }
+  return resultOr->succeeded ? ExecutionStatus::Success
+                             : ExecutionStatus::UserError;
 }
 
 std::optional<std::string> readCell(size_t cellNumber) {
@@ -68,7 +84,8 @@ int runInteractive(InteractiveSession &session) {
     std::optional<std::string> cell = readCell(cellNumber);
     if (!cell || *cell == ":quit\n")
       return 0;
-    execute(session, *cell);
+    if (execute(session, *cell) == ExecutionStatus::InfrastructureError)
+      return 1;
   }
 }
 
@@ -117,5 +134,5 @@ int main(int argc, char **argv) {
 
   if (interactive)
     return runInteractive(*session);
-  return execute(*session, *source) ? 0 : 1;
+  return execute(*session, *source) == ExecutionStatus::Success ? 0 : 1;
 }

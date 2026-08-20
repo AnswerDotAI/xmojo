@@ -14,5 +14,6 @@ from std.xmojo import (
     MIMEData,
     SVGRepr,
     __xmojo_display,
+    __xmojo_error,
     display,
 )

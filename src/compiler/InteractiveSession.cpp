@@ -21,6 +21,7 @@
 #include "KGEN/Support/Constants.h"
 #include "KGEN/ToolCommon/InitAllDialects.h"
 #include "KGEN/TransformUtils/SlicingUtils.h"
+#include "Support/FileSystemExtras.h"
 #include "Support/MDialect/MAttrs.h"
 #include "mlir/IR/Diagnostics.h"
 #include "mlir/IR/DialectRegistry.h"
@@ -50,6 +51,7 @@ namespace {
 thread_local OutputCallback *activeOutput = nullptr;
 thread_local DisplayCallback *activeDisplay = nullptr;
 thread_local std::optional<DisplayEvent> pendingDisplay;
+thread_local std::optional<RuntimeError> pendingRuntimeError;
 
 void writeAll(int fileDescriptor, const char *data, size_t size) {
   while (size != 0) {
@@ -73,6 +75,15 @@ extern "C" void xmojo_emit_print(const char *data, size_t size,
     return;
   }
   writeAll(fileDescriptor, data, size);
+}
+
+extern "C" void xmojo_emit_error(const char *message, size_t messageSize,
+                                 const char *stackTrace,
+                                 size_t stackTraceSize) {
+  pendingRuntimeError.emplace(RuntimeError{
+      std::string(message, messageSize),
+      stackTraceSize == 0 ? std::string()
+                          : std::string(stackTrace, stackTraceSize)});
 }
 
 extern "C" void xmojo_display_begin(int32_t kind) {
@@ -117,16 +128,19 @@ class RuntimeCallbackScope {
 public:
   explicit RuntimeCallbackScope(SessionOptions &options)
       : previousOutput(activeOutput), previousDisplay(activeDisplay),
-        previousPending(std::move(pendingDisplay)) {
+        previousPendingDisplay(std::move(pendingDisplay)),
+        previousRuntimeError(std::move(pendingRuntimeError)) {
     OutputCallback &output = options.output;
     activeOutput = output ? &output : nullptr;
     DisplayCallback &display = options.display;
     activeDisplay = display ? &display : nullptr;
     pendingDisplay.reset();
+    pendingRuntimeError.reset();
   }
 
   ~RuntimeCallbackScope() {
-    pendingDisplay = std::move(previousPending);
+    pendingRuntimeError = std::move(previousRuntimeError);
+    pendingDisplay = std::move(previousPendingDisplay);
     activeDisplay = previousDisplay;
     activeOutput = previousOutput;
   }
@@ -134,7 +148,8 @@ public:
 private:
   OutputCallback *previousOutput;
   DisplayCallback *previousDisplay;
-  std::optional<DisplayEvent> previousPending;
+  std::optional<DisplayEvent> previousPendingDisplay;
+  std::optional<RuntimeError> previousRuntimeError;
 };
 
 void initializeTargets() {
@@ -169,6 +184,10 @@ public:
   }
 
   ErrorOr<ExecutionResult> execute(StringRef source) {
+    if (!usable)
+      return Error("interactive session is unusable after a native JIT "
+                   "failure; restart it");
+
     ExecutionResult result;
 
     std::string compilerDiagnosticText;
@@ -237,18 +256,28 @@ public:
     constexpr StringLiteral libraryName = "mojo-interactive-session";
     if (ErrorOrSuccess error = executionEngine->add<StaticArchiveLayer>(
             libraryName, archiveOr.takeValue())) {
+      usable = false;
       return error.takeError();
     }
     if (!runtimeSymbolsDefined) {
-      if (ErrorOrSuccess error = defineRuntimeSymbols(libraryName))
+      if (ErrorOrSuccess error = defineRuntimeSymbols(libraryName)) {
+        usable = false;
         return error.takeError();
+      }
       runtimeSymbolsDefined = true;
     }
 
     ErrorOr<CompiledFunc> functionOr =
         executionEngine->lookup(libraryName, functionName);
-    if (functionOr.isError())
+    if (functionOr.isError()) {
+      usable = false;
       return functionOr.takeError();
+    }
+
+    // Static declarations are already resident in ORC and cannot be removed
+    // per cell through Modular's execution-engine API. Make the parser history
+    // match that state before running executable statements, which may raise.
+    interactiveParser->commit(*cell);
 
     llvm::CrashRecoveryContext crashRecovery;
     crashRecovery.Enable();
@@ -256,12 +285,16 @@ public:
     bool executed =
         crashRecovery.RunSafely([&] { functionOr->invoke<void>(); });
     if (!executed) {
-      result.diagnostics.push_back(
-          {xmojo::DiagnosticSeverity::Error, "Mojo cell execution crashed"});
+      usable = false;
+      return Error("Mojo cell execution crashed; restart the interactive "
+                   "session");
+    }
+
+    if (pendingRuntimeError) {
+      result.runtimeError = std::move(*pendingRuntimeError);
       return result;
     }
 
-    interactiveParser->commit(*cell);
     result.succeeded = true;
     return result;
   }
@@ -319,8 +352,14 @@ private:
       return targetInfoOr.takeError();
     targetInfo = *targetInfoOr;
 
-    auto objectCompilerOr = ObjectCompiler::create(
-        kMojoCacheBaseDirName, compilationOptions, /*isJIT=*/true, mlirContext);
+    auto objectCacheOr = TempDir::create("xmojo-session.%%%%%%");
+    if (objectCacheOr.isError())
+      return objectCacheOr.takeError();
+    objectCache.emplace(std::move(*objectCacheOr));
+
+    auto objectCompilerOr =
+        ObjectCompiler::create(objectCache->getPath().string(),
+                               compilationOptions, /*isJIT=*/true, mlirContext);
     if (objectCompilerOr.isError())
       return objectCompilerOr.takeError();
     objectCompiler = objectCompilerOr.takeValue();
@@ -366,6 +405,7 @@ private:
           llvm::JITSymbolFlags::Exported);
     };
     addSymbol("xmojo_emit_print", &xmojo_emit_print);
+    addSymbol("xmojo_emit_error", &xmojo_emit_error);
     addSymbol("xmojo_display_begin", &xmojo_display_begin);
     addSymbol("xmojo_display_add", &xmojo_display_add);
     addSymbol("xmojo_display_end", &xmojo_display_end);
@@ -382,10 +422,13 @@ private:
   MLIRContext mlirContext;
   std::unique_ptr<InteractiveParser> interactiveParser;
   TargetInfoAttr targetInfo;
+  // Declared before its users so it is removed after the engine and compiler.
+  std::optional<TempDir> objectCache;
   std::unique_ptr<ObjectCompiler> objectCompiler;
   std::unique_ptr<ExecutionEngine> executionEngine;
   size_t nextCellID = 1;
   bool runtimeSymbolsDefined = false;
+  bool usable = true;
 };
 
 ErrorOr<std::unique_ptr<InteractiveSession>>
