@@ -20,7 +20,11 @@ namespace {
 
 void printDiagnostics(const ExecutionResult &result) {
   for (const Diagnostic &diagnostic : result.diagnostics)
-    std::cerr << diagnostic.message;
+    std::cerr << diagnostic.message
+              << (diagnostic.message.empty() ||
+                          diagnostic.message.back() == '\n'
+                      ? ""
+                      : "\n");
 }
 
 bool execute(InteractiveSession &session, const std::string &source) {

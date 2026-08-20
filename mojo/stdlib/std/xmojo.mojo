@@ -126,3 +126,12 @@ def __xmojo_display[T: AnyType](value: T):
 def __xmojo_display(value: None):
     """Suppress the result of an expression returning `None`."""
     pass
+
+
+def __xmojo_error(error: Error):
+    """Route a raised cell error to the session instead of printing it."""
+    var message = String(error)
+    external_call["xmojo_emit_error", NoneType](
+        message.as_bytes().unsafe_ptr(),
+        c_size_t(message.byte_length()),
+    )

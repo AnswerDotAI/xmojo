@@ -499,7 +499,7 @@ WrappedCell wrapCell(StringRef source, const llvm::MemoryBuffer *sourceBuffer,
     }
   }
   output << "  except error:\n"
-         << "    print(\"Error:\", error)\n\n";
+         << "    __xmojo_cell_error(error)\n\n";
 
   for (StringRef line : topLevel) {
     wrapped.map.add(line, output.str().size());
@@ -508,6 +508,7 @@ WrappedCell wrapCell(StringRef source, const llvm::MemoryBuffer *sourceBuffer,
   if (trailing)
     output << "from xmojo import __xmojo_display as "
               "__xmojo_cell_display\n";
+  output << "from xmojo import __xmojo_error as __xmojo_cell_error\n";
   output.flush();
   return wrapped;
 }

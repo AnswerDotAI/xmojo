@@ -266,6 +266,19 @@ var second = unknown_name
   EXPECT_EQ(output.standardError, "warning\n");
 }
 
+TEST(InteractiveSessionTest, ReportsRuntimeRaise) {
+  auto session = createSession();
+  ASSERT_NE(session, nullptr);
+
+  // A cell that raises at runtime must be reported as a failed execution with
+  // an error diagnostic, not swallowed to stdout as a successful cell.
+  EXPECT_TRUE(executionFailsWith(*session, "raise Error(\"kaboom\")\n",
+                                 "kaboom"));
+
+  // The session stays usable after a raised cell.
+  EXPECT_TRUE(executionSucceeds(*session, "42\n"));
+}
+
 TEST(InteractiveSessionTest, IsolatesSessions) {
   auto first = createSession();
   auto second = createSession();

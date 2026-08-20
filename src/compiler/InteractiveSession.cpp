@@ -50,6 +50,7 @@ namespace {
 thread_local OutputCallback *activeOutput = nullptr;
 thread_local DisplayCallback *activeDisplay = nullptr;
 thread_local std::optional<DisplayEvent> pendingDisplay;
+thread_local std::optional<std::string> pendingError;
 
 void writeAll(int fileDescriptor, const char *data, size_t size) {
   while (size != 0) {
@@ -73,6 +74,12 @@ extern "C" void xmojo_emit_print(const char *data, size_t size,
     return;
   }
   writeAll(fileDescriptor, data, size);
+}
+
+// Set when a cell raises: the wrapper's except clause routes the error here
+// instead of printing it, so execute() can report a failed cell.
+extern "C" void xmojo_emit_error(const char *data, size_t size) {
+  pendingError.emplace(data, size);
 }
 
 extern "C" void xmojo_display_begin(int32_t kind) {
@@ -117,15 +124,18 @@ class RuntimeCallbackScope {
 public:
   explicit RuntimeCallbackScope(SessionOptions &options)
       : previousOutput(activeOutput), previousDisplay(activeDisplay),
-        previousPending(std::move(pendingDisplay)) {
+        previousPending(std::move(pendingDisplay)),
+        previousError(std::move(pendingError)) {
     OutputCallback &output = options.output;
     activeOutput = output ? &output : nullptr;
     DisplayCallback &display = options.display;
     activeDisplay = display ? &display : nullptr;
     pendingDisplay.reset();
+    pendingError.reset();
   }
 
   ~RuntimeCallbackScope() {
+    pendingError = std::move(previousError);
     pendingDisplay = std::move(previousPending);
     activeDisplay = previousDisplay;
     activeOutput = previousOutput;
@@ -135,6 +145,7 @@ private:
   OutputCallback *previousOutput;
   DisplayCallback *previousDisplay;
   std::optional<DisplayEvent> previousPending;
+  std::optional<std::string> previousError;
 };
 
 void initializeTargets() {
@@ -261,6 +272,14 @@ public:
       return result;
     }
 
+    // A cell that raised at runtime routed its error here: report a failed
+    // execution and do not commit the cell to visible history.
+    if (pendingError) {
+      result.diagnostics.push_back(
+          {xmojo::DiagnosticSeverity::Error, std::move(*pendingError)});
+      return result;
+    }
+
     interactiveParser->commit(*cell);
     result.succeeded = true;
     return result;
@@ -369,6 +388,7 @@ private:
     addSymbol("xmojo_display_begin", &xmojo_display_begin);
     addSymbol("xmojo_display_add", &xmojo_display_add);
     addSymbol("xmojo_display_end", &xmojo_display_end);
+    addSymbol("xmojo_emit_error", &xmojo_emit_error);
     if (llvm::Error error =
             dylib->define(llvm::orc::absoluteSymbols(std::move(symbols))))
       return Error(llvm::toString(std::move(error)));
