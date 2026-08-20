@@ -60,6 +60,17 @@ Splitting cells into separate JITDylibs does not work: Mojo normally gives those
 helper symbols private linkage because a one-shot compilation has no later
 consumer.
 
+Each session also compiles into its own object cache directory, created under
+the system temporary directory and removed when the session is destroyed.
+`SessionOptions::objectCacheDir` names a directory instead, and a relative name
+such as `.mojo_cache` selects Modular's shared cache location. Sharing that
+location across sessions is unsafe today: `ObjectCompiler` caches per function,
+so a cell can hit objects another session cached, and the resulting archive
+defines symbols this session's JITDylib already holds. The duplicate definitions
+warn, drop the affected cell's result, and eventually produce wrong values. A
+session killed rather than destroyed leaves its directory for the operating
+system to reap.
+
 The frontend targets use Modular's `mojo_test_environment` rule directly. An
 xmojo-owned source overlay replaces the default stdlib plugin while retaining
 Modular's accelerator plugins, then precompiles the resulting `std`. The

@@ -18,7 +18,6 @@
 #include "KGEN/LITDialect/LITOps.h"
 #include "KGEN/MojoParser/EntryPoint.h"
 #include "KGEN/Support/Configuration.h"
-#include "KGEN/Support/Constants.h"
 #include "KGEN/ToolCommon/InitAllDialects.h"
 #include "KGEN/TransformUtils/SlicingUtils.h"
 #include "Support/MDialect/MAttrs.h"
@@ -27,10 +26,12 @@
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/IR/SymbolTable.h"
+#include "llvm/ADT/SmallString.h"
 #include "llvm/ExecutionEngine/Orc/AbsoluteSymbols.h"
 #include "llvm/IR/Mangler.h"
 #include "llvm/Support/CrashRecoveryContext.h"
 #include "llvm/Support/Error.h"
+#include "llvm/Support/FileSystem.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/TargetSelect.h"
 
@@ -297,6 +298,14 @@ public:
     return interactiveParser->isComplete(source);
   }
 
+  ~Impl() {
+    if (ownedObjectCache.empty())
+      return;
+    // Drop the compiler before removing the cache directory it writes into.
+    objectCompiler.reset();
+    llvm::sys::fs::remove_directories(ownedObjectCache);
+  }
+
 private:
   Impl(ContextRef runtimeContext, SessionOptions options)
       : runtimeContext(std::move(runtimeContext)), options(std::move(options)),
@@ -338,8 +347,19 @@ private:
       return targetInfoOr.takeError();
     targetInfo = *targetInfoOr;
 
+    std::string objectCache = options.objectCacheDir;
+    if (objectCache.empty()) {
+      llvm::SmallString<128> temporaryCache;
+      if (std::error_code error = llvm::sys::fs::createUniqueDirectory(
+              "xmojo-session", temporaryCache))
+        return Error("could not create session cache directory: " +
+                     error.message());
+      ownedObjectCache = temporaryCache.str().str();
+      objectCache = ownedObjectCache;
+    }
+
     auto objectCompilerOr = ObjectCompiler::create(
-        kMojoCacheBaseDirName, compilationOptions, /*isJIT=*/true, mlirContext);
+        objectCache, compilationOptions, /*isJIT=*/true, mlirContext);
     if (objectCompilerOr.isError())
       return objectCompilerOr.takeError();
     objectCompiler = objectCompilerOr.takeValue();
@@ -402,6 +422,7 @@ private:
   MLIRContext mlirContext;
   std::unique_ptr<InteractiveParser> interactiveParser;
   TargetInfoAttr targetInfo;
+  std::string ownedObjectCache;
   std::unique_ptr<ObjectCompiler> objectCompiler;
   std::unique_ptr<ExecutionEngine> executionEngine;
   size_t nextCellID = 1;

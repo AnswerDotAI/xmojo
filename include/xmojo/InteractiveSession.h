@@ -87,6 +87,10 @@ struct CompletenessResult {
 
 struct SessionOptions {
   std::vector<std::string> importPaths;
+  // Cache directory for compiled cell objects. Empty gives this session a
+  // private temporary directory, removed when the session ends. Sharing one
+  // directory can return objects another session cached, duplicating symbols.
+  std::string objectCacheDir;
   OutputCallback output;
   DisplayCallback display;
 };
