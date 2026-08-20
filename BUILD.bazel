@@ -1,0 +1,68 @@
+load("@//bazel:api.bzl", "mojo_test_environment")
+load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("@rules_cc//cc:cc_test.bzl", "cc_test")
+
+mojo_test_environment(
+    name = "stdlib_environment",
+    data = ["@mojo//:std"],
+)
+
+cc_library(
+    name = "interactive_session",
+    srcs = glob([
+        "src/compiler/*.cpp",
+        "src/compiler/*.h",
+    ]),
+    hdrs = ["include/xmojo/InteractiveSession.h"],
+    data = ["@//KGEN:CompilerRT"],
+    strip_include_prefix = "include",
+    deps = [
+        "@//AsyncRT:CompilerSupport",
+        "@//AsyncRT:Runtime",
+        "@//Init",
+        "@//KGEN:Compiler",
+        "@//KGEN:ExecutionEngine",
+        "@//KGEN:KGENDialect",
+        "@//KGEN:LITDialect",
+        "@//KGEN:MojoParser",
+        "@//KGEN:MojoTooling",
+        "@//KGEN:ObjectCompiler",
+        "@//KGEN:ToolCommon",
+        "@//KGEN:TransformUtils",
+        "@//Support:Context",
+        "@//Support:MDialect",
+        "@llvm-project//llvm:Support",
+        "@llvm-project//mlir:IR",
+    ],
+)
+
+cc_binary(
+    name = "mojoorc",
+    srcs = ["src/mojoorc.cpp"],
+    data = [":stdlib_environment"],
+    env = {
+        "MODULAR_CRASH_REPORTING_ENABLED": "0",
+        "MODULAR_MOJO_MAX_IMPORT_PATH": "$(COMPUTED_IMPORT_PATH)",
+    },
+    toolchains = [":stdlib_environment"],
+    deps = [":interactive_session"],
+)
+
+cc_test(
+    name = "session_test",
+    srcs = ["tests/session_test.cpp"],
+    data = [":stdlib_environment"],
+    env = {
+        "MODULAR_CRASH_REPORTING_ENABLED": "0",
+        "MODULAR_MOJO_MAX_IMPORT_PATH": "$(COMPUTED_IMPORT_PATH)",
+    },
+    toolchains = [":stdlib_environment"],
+    deps = [
+        ":interactive_session",
+        "@llvm-project//third-party/unittest:gtest",
+    ] + select({
+        "@platforms//os:macos": ["@//bazel/internal:gtest_main_objc_pool_check"],
+        "//conditions:default": ["@llvm-project//third-party/unittest:gtest_main"],
+    }),
+)

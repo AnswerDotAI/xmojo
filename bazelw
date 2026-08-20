@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+script_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+modular_root="$script_root/../modular"
+cd "$modular_root"
+
+if [[ $# -eq 0 ]]; then
+  exec "$modular_root/bazelw"
+fi
+
+command="$1"
+shift
+
+case "$command" in
+build | run | test)
+  exec "$modular_root/bazelw" "$command" --config=build-mojo \
+    --check_visibility=false \
+    --inject_repository="xmojo=$script_root" "$@"
+  ;;
+*)
+  exec "$modular_root/bazelw" "$command" "$@"
+  ;;
+esac

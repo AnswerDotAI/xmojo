@@ -1,0 +1,5 @@
+"""Repository marker for the injected xmojo worktree."""
+
+repo(
+    default_package_metadata = [],
+)
