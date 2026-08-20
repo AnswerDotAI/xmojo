@@ -66,6 +66,11 @@ Modular's accelerator plugins, then precompiles the resulting `std`. The
 environment computes its runfiles import path and stages the runtime libraries
 without requiring an installed Mojo toolchain.
 
+`tools/install_cli.sh` uses Bazel's `--script_path` to install lightweight
+launchers rather than copying the binaries without their runtime environment.
+The launchers execute the current Bazel outputs directly and therefore need to
+be regenerated after `bazel clean` or an output-base change.
+
 CPU `print()` calls use the stdlib's `print_emit_fn` hook. Generated code calls
 an explicitly registered ORC symbol, which routes stdout and stderr to the
 callback active for that synchronous session execution. Calls without a

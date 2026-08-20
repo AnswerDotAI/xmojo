@@ -1,14 +1,13 @@
 # xmojo
 
-`xmojo` is an experimental interactive Mojo environment built on Modular's
-ORC execution engine. The compiler integration, execution session, tests, and
-frontends all live in this repository. An unmodified sibling Modular checkout
-provides the compiler and runtime implementation.
+`xmojo` is an experimental interactive Mojo environment built on Modular's ORC execution engine.
+
+`xmojo` is the xeus-based Jupyter kernel executable. Jupyter launches it with a connection file; it keeps one `InteractiveSession` alive for the lifetime of the kernel and publishes compiler diagnostics and exact stdout/stderr streams.
 
 The terminal frontend is `mojoorc`:
 
 ```console
-$ ./bazelw run @xmojo//:mojoorc
+$ mojoorc
 Mojo ORC REPL
 Expressions are delimited by a blank line. :quit exits.
 
@@ -23,13 +22,19 @@ Expressions are delimited by a blank line. :quit exits.
 It also accepts a single expression or a file:
 
 ```bash
-./bazelw run @xmojo//:mojoorc -- -e 'print("hello")'
-./bazelw run @xmojo//:mojoorc -- example.mojo
+mojoorc -e 'print("hello")'
+mojoorc example.mojo
 ```
 
-`xmojo` is the xeus-based Jupyter kernel executable. Jupyter launches it with
-a connection file; it keeps one `InteractiveSession` alive for the lifetime of
-the kernel and publishes compiler diagnostics and exact stdout/stderr streams.
+Build and install both commands locally with:
+
+```bash
+./tools/install_cli.sh
+```
+
+This installs Bazel-generated, runfiles-aware launchers in `~/.local/bin`.
+Pass another directory as the first argument to install elsewhere. Rerun the
+script after `bazel clean` or changing Bazel's output base.
 
 ## Development layout
 
