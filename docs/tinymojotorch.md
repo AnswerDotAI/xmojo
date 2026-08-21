@@ -620,6 +620,57 @@ native Mojo host code. Both call the same runtime boundary and load the same
 kind of kernel artifacts. There is no IREE VM or second host control-flow
 system.
 
+### Installation and backend selection
+
+The intended supported-platform experience is one ordinary installation:
+
+```bash
+pip install xmojo
+xmojo
+```
+
+The Python wheel is a distribution format for the native xmojo command,
+compiler, Mojo packages, and notebook kernel; TinyMojoTorch remains a Mojo API.
+Users should not need separate Mojo, IREE, LLVM, SPIRV-Cross, Metal, Vulkan,
+CUDA, or ROCm development toolchains.
+
+The first platform artifacts should contain only useful native drivers:
+
+```text
+Apple Silicon macOS   Metal
+Linux                 Vulkan on AMD and NVIDIA
+```
+
+Vulkan provides one portable Linux baseline rather than requiring separate
+framework installations for each vendor. It still requires the ordinary AMD
+or NVIDIA system GPU driver, just as accelerator frameworks cannot replace a
+working kernel driver. Metal is supplied by macOS.
+
+Hardware is selected at runtime rather than installation time:
+
+```mojo
+var device = Device.open("auto")
+var amd_or_nvidia = Device.open("vulkan:0")
+var mac = Device.open("metal:0")
+```
+
+`auto` follows a documented preference order over available backends. Explicit
+selectors remain stable within a process, buffers belong to one selected
+device, and incompatible-device operations fail rather than copying silently.
+The Jupyter kernel retains the selected default device and its resources for
+the session.
+
+Later native compiler/runtime paths can add PTX or cubin through IREE CUDA and
+HSACO through IREE HIP or AMDGPU. If their linked size and system dependencies
+remain reasonable they can live in the relevant platform wheel. Otherwise,
+small backend wheels can register themselves with the same runtime discovery
+layer. Neither arrangement changes tensor programs or the device API.
+
+This is a packaging goal, not a current support claim. The Metal story is the
+first implementation. AMD and NVIDIA support becomes releasable only when the
+same compile, persistent-buffer, asynchronous-dispatch, and exact-readback
+narrative runs on real hardware in CI or equivalent test machines.
+
 ## Performance philosophy
 
 Performance is important, but simplicity and usability constrain how it is
@@ -706,10 +757,14 @@ goal.
 
 ### Phase 0: establish the native runtime boundary
 
-Complete the IREE HAL runtime-only experiment and the xmojo-owned
+The Metal portion of this phase is complete. The IREE HAL runtime-only
+experiment and xmojo-owned
 `Device`/`Buffer`/`Executable`/`Event`/`KernelArtifact` boundary described in
-the accelerator architecture document. Measure packaging, initialization,
-dispatch, and lifetime behavior before treating HAL as settled.
+the accelerator architecture document now cover device selection, byte-range
+buffer views, opaque push constants, asynchronous dispatch, executable
+replacement, and measured packaging and lifetime behavior. Vulkan and
+discrete-device memory behavior remain later hardware-backed extensions of the
+same boundary.
 
 ### Phase 1: a CPU tensor semantic slice
 
@@ -794,13 +849,17 @@ complete training stories.
 ### Phase 7: packaging and ecosystem
 
 Separate the tensor package from xmojo where doing so produces a cleaner
-ordinary-Mojo dependency. Publish platform artifacts containing only the
-runtime drivers useful on that platform. Keep xmojo as the reference
-interactive environment, notebook exporter, and compiler distribution.
+ordinary-Mojo dependency. Publish self-contained PyPI platform wheels with
+Metal on Apple Silicon and a Vulkan baseline on Linux for AMD and NVIDIA.
+Include native CUDA or AMD backends in platform wheels when practical, or as
+automatically discovered backend wheels when their size or system dependencies
+justify separation. Keep xmojo as the reference interactive environment,
+notebook exporter, and compiler distribution.
 
 Broader backend work follows the accelerator document and measured need. The
 public tensor and runtime APIs must not encode IREE, Metal, Vulkan, CUDA, or HIP
-implementation details.
+implementation details. Release claims require the complete narrative on real
+hardware for every advertised backend.
 
 ## Early decision tests
 
@@ -847,4 +906,3 @@ The direction is working when:
   Library](https://arxiv.org/abs/1912.01703)
 - tinygrad, [developer documentation](https://github.com/tinygrad/tinygrad/blob/master/docs/developer/developer.md)
 - Mojo, [vision and architecture](https://docs.modular.com/mojo/vision/)
-
