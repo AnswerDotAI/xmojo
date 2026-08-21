@@ -30,6 +30,25 @@ duplicating Modular's build configuration. It passes
 `--check_visibility=false` because consuming unstable private compiler targets
 is intentional. The dependency list remains explicit in `BUILD.bazel`.
 
+## Development layout
+
+Development uses editable sibling worktrees rather than vendored or patched
+dependencies:
+
+```text
+git/
+├── modular/
+├── xmojo/
+├── nlohmann-json/
+├── xeus/
+├── xeus-zmq/
+├── libzmq/
+└── cppzmq/
+```
+
+`XMOJO_MODULAR_ROOT` selects the Modular worktree; the other sibling revisions
+are recorded in `bazel/versions.bzl`.
+
 ## Interactive compiler PoC
 
 `InteractiveParser` does not call `parseREPLExpression` and does not create an
