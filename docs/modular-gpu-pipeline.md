@@ -79,12 +79,14 @@ rather than only a runtime driver:
 3. KGEN/LLVM lowering and artifact emission;
 4. an xmojo launch ABI implemented over IREE HAL.
 
-The first compiler route will use SPIR-V: Vulkan can consume packaged SPIR-V
+The first compiler route uses SPIR-V: Vulkan can consume packaged SPIR-V
 directly, while Metal will use SPIRV-Cross to produce MSL before packaging it
-for IREE's Metal driver. Later NVPTX and AMDGPU targets can emit PTX/cubin and
-HSACO for the CUDA and HIP/AMDGPU drivers. These targets share the source-level
-contract and offload machinery while providing different lowerings and
-artifact formats.
+for IREE's Metal driver. The compiler-only PoC now registers an independent
+SPIR-V traits/lowering/backend set and emits a typed Vulkan compute interface
+from ordinary Mojo functions. Later NVPTX and AMDGPU targets can emit
+PTX/cubin and HSACO for the CUDA and HIP/AMDGPU drivers. These targets share
+the source-level contract and offload machinery while providing different
+lowerings and artifact formats.
 
 ## 1. The target is a compile-time value
 
@@ -256,10 +258,14 @@ The late-pass hook runs after generic lowering and canonicalization but before
 translation to LLVM IR. This is the final point where a backend can perform a
 module-level transformation while retaining MLIR type information.
 
-This is the natural home for a portable GPU kernel ABI pass: form the shader
-entry point, define resources, convert the user kernel's logical parameters
-into resource or uniform accesses, and reject unsupported signatures. Doing
-this here avoids reconstructing types from opaque LLVM pointers.
+The typed ABI must be decided before translation to opaque LLVM pointers, but
+the adapter itself need not be built there. The current xmojo PoC uses
+`TargetBackend::prepareModuleForLowering` to validate the KGEN signature and
+preserved argument annotations, then records a compact versioned manifest as
+function metadata. At LLVM IR, the backend uses that manifest to build the
+parameterless shader entry point and resource accesses. This keeps type
+reconstruction out of LLVM while using LLVM's first-class SPIR-V resource
+intrinsics for the final interface.
 
 ### `TargetBackend`: LLVM policy and emitted artifacts
 
@@ -645,9 +651,10 @@ AMDGPU -> HSACO        -> IREE HIP or AMDGPU HAL
 Metal  -> native artifact, if an appropriate compiler route becomes available
 ```
 
-Target lowering must form the resource and scalar ABI while typed MLIR
-information remains available. `attachCodegenAttributes()` should perform only
-genuine final LLVM marking. Workgroup size is an executable property; dispatch
+Target preparation must form the resource and scalar ABI while typed MLIR
+information remains available. An LLVM-level wrapper may then realize that
+already-defined ABI. `attachCodegenAttributes()` should perform only genuine
+final LLVM marking. Workgroup size is an executable property; dispatch
 specifies workgroup counts. If a backend supports runtime specialization, that
 can be represented explicitly rather than pretending all backends accept an
 arbitrary launch-time block size.
@@ -702,9 +709,17 @@ errors associated with the cell that submitted or awaited the operation.
    `Device`, `Buffer`, `Executable`, `Event`, and `KernelArtifact` abstractions
    implement the narrative, including `auto`, `metal`, and `metal:0`
    selection.
-5. **Fix typed SPIR-V ABI formation.** Move signature analysis and wrapper
-   construction before opaque LLVM pointers, with read-only/read-write storage
-   buffers and a defined scalar layout. Reject other signatures.
+5. **Typed SPIR-V ABI formation — compiler PoC complete.** xmojo analyzes the
+   specialized KGEN signature before pointer erasure, carries a versioned ABI
+   manifest through LLVM metadata, and creates a parameterless Vulkan compute
+   wrapper with ordered read-only/read-write storage buffers and 32-bit scalar
+   push constants. The initial contract accepts `Float32`, `Int32`, and
+   `UInt32`, uses a fixed `1 x 1 x 1` workgroup, rejects unannotated pointers
+   and unsupported signatures, and emits both textual and binary SPIR-V. The
+   narrative test checks the SPIR-V magic, compute entry point, descriptor
+   bindings, `NonWritable` decoration, push-constant interface, and rejection
+   diagnostic. The raw `@__llvm_arg_metadata` annotations are internal
+   scaffolding; the portable Mojo buffer API will generate them.
 6. **Connect Metal compilation.** Translate emitted logical SPIR-V with
    standalone SPIRV-Cross, package MSL through the adapter, and run the same
    persistent-buffer story from Mojo source.

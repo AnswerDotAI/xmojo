@@ -31,7 +31,7 @@ def _modular_gpu():
 
 
 def _run(name):
-    root = Path(__file__).parent
+    root = Path(__file__).parent / "_native"
     args = sys.argv[1:]
     package_dir = root / "mojo" / "base"
     imports = [str(package_dir), str(root / "mojo")]

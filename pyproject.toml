@@ -1,0 +1,57 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "xmojo"
+version = "0.0.2026082005.post1"
+description = "Interactive Mojo environment using Modular's ORC execution engine"
+readme = "README.md"
+requires-python = ">=3.9"
+license = "Apache-2.0 WITH LLVM-exception"
+license-files = ["LICENSE"]
+
+[project.optional-dependencies]
+modular-gpu = ["max-core==26.6.0.dev2026082005"]
+
+[project.scripts]
+xmojo = "xmojo._cli:xmojo"
+
+[project.urls]
+Homepage = "https://github.com/AnswerDotAI/xmojo"
+Repository = "https://github.com/AnswerDotAI/xmojo"
+
+[tool.setuptools]
+package-dir = {"" = "python"}
+packages = ["xmojo"]
+include-package-data = false
+
+[tool.setuptools.data-files]
+"share/jupyter/kernels/xmojo" = ["share/jupyter/kernels/xmojo/kernel.json"]
+
+[tool.uv]
+preview-features = ["index-exclude-newer"]
+cache-keys = [
+  {file = "pyproject.toml"},
+  {file = "setup.py"},
+  {file = "BUILD.bazel"},
+  {file = "bazel/**/*.bzl"},
+  {file = "cmake/**/*"},
+  {file = "include/**/*.h"},
+  {file = "mojo/**/*.mojo"},
+  {file = "python/**/*.py"},
+  {file = "share/**/*"},
+  {file = "src/**/*.cpp"},
+  {file = "src/**/*.h"},
+  {env = "XMOJO_BAZEL_WRAPPER"},
+  {env = "XMOJO_DEPS_ROOT"},
+  {env = "XMOJO_MODULAR_ROOT"},
+]
+
+[tool.uv.sources]
+max-core = {index = "modular-nightly"}
+
+[[tool.uv.index]]
+name = "modular-nightly"
+url = "https://whl.modular.com/nightly/simple/"
+exclude-newer = false

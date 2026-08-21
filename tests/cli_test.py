@@ -36,4 +36,21 @@ class CLIStory(unittest.TestCase):
             self.run_ok(xmojo, "precompile", package, "-o", artifact)
             self.assertGreater(artifact.stat().st_size, 0)
 
+            spirv = root / "spirv.mojo"
+            spirv.write_text('''from std.compile import compile_info
+from xmojo.spirv import _target
+
+@__llvm_arg_metadata(
+    output, `llvm.xmojo.binding`=__mlir_attr.`"read_write:f32"`
+)
+def clear(output: Pointer[Float32, MutAnyOrigin]):
+    output[] = 0
+
+var object = compile_info[clear, target=_target, emission_kind="object"]().asm
+var data = object.as_bytes()
+print(data[0], data[1], data[2], data[3])
+''')
+            result = self.run_ok(xmojo, spirv)
+            self.assertEqual(result.stdout, "3 2 35 7\n")
+
 if __name__ == "__main__": unittest.main(argv=sys.argv[:1])

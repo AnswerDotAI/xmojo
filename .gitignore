@@ -2,4 +2,11 @@ pixi.lock
 /bazel-*
 /.xmojo-deps/
 /.pixi/
+/.venv/
+__pycache__/
+*.pyc
+/build/
+/dist/
+/python/xmojo/_native/
+/python/xmojo.egg-info/
 /tags

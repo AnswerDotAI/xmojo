@@ -12,7 +12,10 @@ mojo_library(
 
 mojo_library(
     name = "xmojo_base",
-    srcs = ["__init__.mojo"],
+    srcs = [
+        "__init__.mojo",
+        "spirv.mojo",
+    ],
     validate_missing_docs = False,
     deps = ["//:std"],
 )

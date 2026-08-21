@@ -20,22 +20,48 @@ check_repo() {
   fi
 }
 
-modular_root="${XMOJO_MODULAR_ROOT:?export XMOJO_MODULAR_ROOT to the pinned Modular worktree}"
+check_modular() {
+  local path="$1" actual dirty changes
+  actual="$(git -C "$path" rev-parse HEAD)"
+  if [[ "$actual" != "$MODULAR_REVISION" ]]; then
+    echo "Modular is at $actual; expected $MODULAR_REVISION" >&2
+    exit 1
+  fi
+  dirty="$(git -C "$path" status --porcelain --untracked-files=no)"
+  changes="$(git -C "$path" diff --numstat -- MODULE.bazel)"
+  if [[ "$dirty" != " M MODULE.bazel" || "$changes" != $'1\t0\tMODULE.bazel' ]] || \
+      ! grep -Fqx 'llvm_configure.configure(extra_targets = ["SPIRV"])' \
+        "$path/MODULE.bazel"; then
+    echo "Modular must differ from $MODULAR_REVISION only by enabling LLVM's SPIRV target in MODULE.bazel" >&2
+    exit 1
+  fi
+}
+
+deps_root="${XMOJO_DEPS_ROOT:-$(dirname "$root")}"
+modular_root="${XMOJO_MODULAR_ROOT:-$deps_root/modular}"
 if [[ "$(uname -s)" != "Darwin" || "$(uname -m)" != "arm64" ]]; then
   echo "the current wheel target is only defined for Apple Silicon" >&2
   exit 1
 fi
 
-check_repo Modular "$modular_root" "$MODULAR_REVISION"
-check_repo nlohmann-json "$root/../nlohmann-json" "$NLOHMANN_JSON_REVISION"
-check_repo xeus "$root/../xeus" "$XEUS_REVISION"
-check_repo xeus-zmq "$root/../xeus-zmq" "$XEUS_ZMQ_REVISION"
-check_repo libzmq "$root/../libzmq" "$LIBZMQ_REVISION"
-check_repo cppzmq "$root/../cppzmq" "$CPPZMQ_REVISION"
+check_modular "$modular_root"
+check_repo nlohmann-json "$deps_root/nlohmann-json" "$NLOHMANN_JSON_REVISION"
+check_repo xeus "$deps_root/xeus" "$XEUS_REVISION"
+check_repo xeus-zmq "$deps_root/xeus-zmq" "$XEUS_ZMQ_REVISION"
+check_repo libzmq "$deps_root/libzmq" "$LIBZMQ_REVISION"
+check_repo cppzmq "$deps_root/cppzmq" "$CPPZMQ_REVISION"
 if [[ "${XMOJO_ALLOW_DIRTY:-0}" != "1" ]]; then check_repo xmojo "$root"; fi
 
 grep -Fqx "max-core = \"==${MAX_CORE_VERSION}\"" "$root/pixi.toml" || {
   echo "pixi.toml does not pin max-core==$MAX_CORE_VERSION" >&2
+  exit 1
+}
+grep -Fqx "version = \"${XMOJO_VERSION}\"" "$root/pyproject.toml" || {
+  echo "pyproject.toml does not declare xmojo==$XMOJO_VERSION" >&2
+  exit 1
+}
+grep -Fqx "modular-gpu = [\"max-core==${MAX_CORE_VERSION}\"]" "$root/pyproject.toml" || {
+  echo "pyproject.toml does not pin max-core==$MAX_CORE_VERSION" >&2
   exit 1
 }
 grep -Fq "max-core-${MAX_CORE_VERSION}-release.conda" "$root/pixi.lock" || {
@@ -43,11 +69,11 @@ grep -Fq "max-core-${MAX_CORE_VERSION}-release.conda" "$root/pixi.lock" || {
   exit 1
 }
 
-wrapper="${XMOJO_BAZEL_WRAPPER:-$root/bazelw}"
-if [[ "$wrapper" != /* ]]; then wrapper="$root/${wrapper#./}"; fi
-"$wrapper" build -c opt @xmojo//:wheel
+export XMOJO_DEPS_ROOT="$deps_root"
+export XMOJO_MODULAR_ROOT="$modular_root"
+uv build --wheel
 
-wheel="$modular_root/bazel-bin/external/+local_repository+xmojo/xmojo-${XMOJO_VERSION}-py3-none-${WHEEL_PLATFORM}.whl"
+wheel="$root/dist/xmojo-${XMOJO_VERSION}-py3-none-${WHEEL_PLATFORM}.whl"
 [[ -f "$wheel" ]] || { echo "wheel output not found at $wheel" >&2; exit 1; }
 checksum="$(shasum -a 256 "$wheel")"
 echo "$wheel"

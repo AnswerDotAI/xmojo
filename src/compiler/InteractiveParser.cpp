@@ -180,14 +180,9 @@ bool isIndented(StringRef line) { return startsWithAny(line, {" ", "\t"}); }
 bool takeTopLevelStatement(unsigned &line, ArrayRef<StringRef> lines,
                            SmallVectorImpl<StringRef> &topLevel) {
   StringRef current = lines[line];
-  if (current.starts_with("@")) {
-    topLevel.push_back(current);
-    ++line;
-    return true;
-  }
-
   bool declaration = isDeclaration(current);
-  bool topLevelStatement = declaration || current.starts_with("from ") ||
+  bool topLevelStatement = current.starts_with("@") || declaration ||
+                           current.starts_with("from ") ||
                            current.starts_with("alias ") ||
                            current.starts_with("comptime");
   if (!topLevelStatement)
