@@ -3,14 +3,24 @@
 set -euo pipefail
 
 script_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-build_root="$script_root/.xmojo-deps/build"
-install_root="$script_root/.xmojo-deps/install"
-modular_root="$script_root/../modular"
-boringssl_include="$modular_root/bazel-modular/external/boringssl+/include"
+deps_root="${1:?usage: build_xeus_deps.sh DEPS_ROOT}"
+output_user_root="${2:?usage: build_xeus_deps.sh DEPS_ROOT OUTPUT_USER_ROOT [prepare]}"
+mode="${3:-build}"
+modular_root="${XMOJO_MODULAR_ROOT:?export XMOJO_MODULAR_ROOT to the Modular checkout to use}"
+build_root="$deps_root/build"
+install_root="$deps_root/install"
+
+mkdir -p "$install_root"
+cp "$script_root/cmake/dependencies/BUILD.bazel" "$install_root/BUILD.bazel"
+cp "$script_root/cmake/dependencies/REPO.bazel" "$install_root/REPO.bazel"
+if [[ "$mode" == "prepare" ]]; then exit 0; fi
+
+output_base="$("$modular_root/bazelw" --output_user_root="$output_user_root" info output_base)"
+boringssl_include="$output_base/external/boringssl+/include"
 
 if [[ ! -f "$boringssl_include/openssl/hmac.h" ]]; then
-  # `bazelw info` creates the output tree but does not fetch external repos.
-  "$modular_root/bazelw" query '@@boringssl+//:crypto' >/dev/null
+  "$modular_root/bazelw" --output_user_root="$output_user_root" \
+    query '@@boringssl+//:crypto' >/dev/null
 fi
 
 if [[ ! -f "$build_root/build.ninja" ]] || \

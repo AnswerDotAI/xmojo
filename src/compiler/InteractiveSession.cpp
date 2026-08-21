@@ -6,6 +6,7 @@
 
 #include "xmojo/InteractiveSession.h"
 #include "InteractiveParser.h"
+#include "OfficialGPUCompiler.h"
 
 #include "AsyncRT/CompilerSupport/Context.h"
 #include "AsyncRT/Runtime/CPUDevice.h"
@@ -28,16 +29,19 @@
 #include "mlir/IR/IRMapping.h"
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/IR/SymbolTable.h"
+#include "llvm/ADT/SmallString.h"
 #include "llvm/ExecutionEngine/Orc/AbsoluteSymbols.h"
 #include "llvm/ExecutionEngine/Orc/ExecutionUtils.h"
 #include "llvm/IR/Mangler.h"
 #include "llvm/Support/CrashRecoveryContext.h"
 #include "llvm/Support/Error.h"
+#include "llvm/Support/FileSystem.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/TargetSelect.h"
 
 #include <cerrno>
 #include <cstdint>
+#include <dlfcn.h>
 #include <mutex>
 #include <optional>
 #include <unistd.h>
@@ -53,6 +57,11 @@ thread_local OutputCallback *activeOutput = nullptr;
 thread_local DisplayCallback *activeDisplay = nullptr;
 thread_local std::optional<DisplayEvent> pendingDisplay;
 thread_local std::optional<RuntimeError> pendingRuntimeError;
+thread_local std::optional<GPUArtifact> pendingGPUArtifact;
+thread_local std::string pendingGPUError;
+using GPUCompileCallback =
+    llvm::unique_function<ErrorOr<GPUArtifact>(llvm::StringRef)>;
+thread_local GPUCompileCallback *activeGPUCompiler = nullptr;
 using PersistentDestroy = void (*)(void *);
 thread_local std::vector<PersistentDestroy> *activePersistentDestroyers =
     nullptr;
@@ -134,6 +143,46 @@ extern "C" void xmojo_display_end() {
   pendingDisplay.reset();
 }
 
+extern "C" int32_t xmojo_compile_gpu(const char *name, size_t nameSize) {
+  pendingGPUArtifact.reset();
+  pendingGPUError.clear();
+  if (!activeGPUCompiler) {
+    pendingGPUError = "GPU compilation is unavailable outside cell execution";
+    return 1;
+  }
+  ErrorOr<GPUArtifact> artifactOr =
+      (*activeGPUCompiler)(StringRef(name, nameSize));
+  if (artifactOr.isError()) {
+    pendingGPUError = artifactOr.getError();
+    return 1;
+  }
+  pendingGPUArtifact.emplace(artifactOr.takeValue());
+  return 0;
+}
+
+extern "C" const char *xmojo_gpu_object_data(size_t *size) {
+  if (!pendingGPUArtifact) {
+    *size = 0;
+    return nullptr;
+  }
+  *size = pendingGPUArtifact->object.size();
+  return pendingGPUArtifact->object.data();
+}
+
+extern "C" const char *xmojo_gpu_function_name(size_t *size) {
+  if (!pendingGPUArtifact) {
+    *size = 0;
+    return nullptr;
+  }
+  *size = pendingGPUArtifact->functionName.size();
+  return pendingGPUArtifact->functionName.data();
+}
+
+extern "C" const char *xmojo_gpu_error(size_t *size) {
+  *size = pendingGPUError.size();
+  return pendingGPUError.data();
+}
+
 class RuntimeCallbackScope {
 public:
   explicit RuntimeCallbackScope(
@@ -142,6 +191,9 @@ public:
       : previousOutput(activeOutput), previousDisplay(activeDisplay),
         previousPendingDisplay(std::move(pendingDisplay)),
         previousRuntimeError(std::move(pendingRuntimeError)),
+        previousGPUCompiler(activeGPUCompiler),
+        previousGPUArtifact(std::move(pendingGPUArtifact)),
+        previousGPUError(std::move(pendingGPUError)),
         previousPersistentDestroyers(activePersistentDestroyers) {
     OutputCallback &output = options.output;
     activeOutput = output ? &output : nullptr;
@@ -150,12 +202,21 @@ public:
     activePersistentDestroyers = persistentDestroyers;
     pendingDisplay.reset();
     pendingRuntimeError.reset();
+    pendingGPUArtifact.reset();
+    pendingGPUError.clear();
+  }
+
+  void setGPUCompiler(GPUCompileCallback &compiler) {
+    activeGPUCompiler = &compiler;
   }
 
   ~RuntimeCallbackScope() {
     activePersistentDestroyers = previousPersistentDestroyers;
     pendingRuntimeError = std::move(previousRuntimeError);
     pendingDisplay = std::move(previousPendingDisplay);
+    pendingGPUError = std::move(previousGPUError);
+    pendingGPUArtifact = std::move(previousGPUArtifact);
+    activeGPUCompiler = previousGPUCompiler;
     activeDisplay = previousDisplay;
     activeOutput = previousOutput;
   }
@@ -165,6 +226,9 @@ private:
   DisplayCallback *previousDisplay;
   std::optional<DisplayEvent> previousPendingDisplay;
   std::optional<RuntimeError> previousRuntimeError;
+  GPUCompileCallback *previousGPUCompiler;
+  std::optional<GPUArtifact> previousGPUArtifact;
+  std::string previousGPUError;
   std::vector<PersistentDestroy> *previousPersistentDestroyers;
 };
 
@@ -178,12 +242,49 @@ void initializeTargets() {
   });
 }
 
+ErrorOrSuccess loadGPURuntime(StringRef requestedPath) {
+  SmallString<256> canonicalPath;
+  if (std::error_code error =
+          llvm::sys::fs::real_path(requestedPath, canonicalPath))
+    return Error((Twine("could not resolve the GPU runtime library '") +
+                  requestedPath + "': " + error.message())
+                     .str());
+
+  static std::mutex mutex;
+  static std::string loadedPath;
+  static void *handle = nullptr;
+  std::lock_guard lock(mutex);
+  if (handle) {
+    if (canonicalPath != loadedPath)
+      return Error((Twine("this process already loaded the GPU runtime '") +
+                    loadedPath + "' and cannot also load '" + canonicalPath +
+                    "'")
+                       .str());
+    return M::success();
+  }
+
+  handle = dlopen(canonicalPath.c_str(), RTLD_NOW | RTLD_GLOBAL);
+  if (!handle)
+    return Error(
+        ("could not load the GPU runtime library: " + std::string(dlerror()))
+            .c_str());
+  loadedPath = canonicalPath.str().str();
+  return M::success();
+}
+
 } // namespace
 
 class InteractiveSession::Impl {
 public:
   static ErrorOr<std::unique_ptr<Impl>> create(SessionOptions options) {
     initializeTargets();
+
+    if (!options.targetAccelerator.empty()) {
+      if (options.gpuRuntimeLibrary.empty())
+        return Error("GPU sessions require SessionOptions.gpuRuntimeLibrary");
+      if (ErrorOrSuccess error = loadGPURuntime(options.gpuRuntimeLibrary))
+        return error.takeError();
+    }
 
     ErrorOr<ContextRef> runtimeContextOr = Init::getOrCreateContext(
         "xmojo",
@@ -296,6 +397,7 @@ public:
     // per cell through Modular's execution-engine API. Make the parser history
     // match that state before running executable statements, which may raise.
     interactiveParser->commit(*cell);
+    gpuDeclarationSource += cell->declarationSource;
 
     std::vector<void *> slots;
     slots.reserve(sessionVars.size() + cell->newVars.size());
@@ -307,6 +409,10 @@ public:
     llvm::CrashRecoveryContext crashRecovery;
     crashRecovery.Enable();
     RuntimeCallbackScope callbackScope(options, &destroyers);
+    GPUCompileCallback gpuCompile = [this](StringRef functionName) {
+      return officialGPUCompiler->compile(gpuDeclarationSource, functionName);
+    };
+    callbackScope.setGPUCompiler(gpuCompile);
     bool executed = crashRecovery.RunSafely(
         [&] { functionOr->invoke<void, void *>(slots.data()); });
     if (!executed) {
@@ -390,8 +496,13 @@ private:
     for (StringRef path : configuredImportPaths)
       importPaths.push_back(path.str());
     llvm::append_range(importPaths, options.importPaths);
+    std::vector<std::string> officialImportPaths = importPaths;
     interactiveParser = std::make_unique<InteractiveParser>(
         mlirContext, compilationOptions, std::move(importPaths));
+    officialGPUCompiler = std::make_unique<OfficialGPUCompiler>(
+        options.officialMojoCompiler, options.officialModularHome,
+        std::move(officialImportPaths), options.targetAccelerator,
+        options.gpuCacheDirectory);
 
     auto targetInfoOr = getTargetInfoFor(
         &mlirContext, compilationOptions.targetTriple,
@@ -478,6 +589,10 @@ private:
     addSymbol("xmojo_display_begin", &xmojo_display_begin);
     addSymbol("xmojo_display_add", &xmojo_display_add);
     addSymbol("xmojo_display_end", &xmojo_display_end);
+    addSymbol("xmojo_compile_gpu", &xmojo_compile_gpu);
+    addSymbol("xmojo_gpu_object_data", &xmojo_gpu_object_data);
+    addSymbol("xmojo_gpu_function_name", &xmojo_gpu_function_name);
+    addSymbol("xmojo_gpu_error", &xmojo_gpu_error);
     if (llvm::Error error =
             dylib->define(llvm::orc::absoluteSymbols(std::move(symbols))))
       return Error(llvm::toString(std::move(error)));
@@ -490,6 +605,8 @@ private:
   EnvAttr compilationEnvironment;
   MLIRContext mlirContext;
   std::unique_ptr<InteractiveParser> interactiveParser;
+  std::unique_ptr<OfficialGPUCompiler> officialGPUCompiler;
+  std::string gpuDeclarationSource;
   TargetInfoAttr targetInfo;
   // Declared before its users so it is removed after the engine and compiler.
   std::optional<TempDir> objectCache;

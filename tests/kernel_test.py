@@ -15,7 +15,7 @@ class KernelStory(unittest.IsolatedAsyncioTestCase):
 
     async def test_real_kernel_runs_a_multi_cell_story(self):
         binary = str(Path(sys.argv[1]).resolve())
-        async with run_kernel("xmojo", argv=[binary, "-f", "{connection_file}"]) as (_, client):
+        async with run_kernel("xmojo", argv=[binary, "kernel", "-f", "{connection_file}"]) as (_, client):
             reply, published = await client.exec_drain(
                 'def answer() -> Int:\n  return 42\n\nprint("ready")\n', timeout=60)
             reply = reply["content"]

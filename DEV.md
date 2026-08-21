@@ -16,8 +16,7 @@ InteractiveSession
 │   └── completion, inspection, and completeness tooling
 ├── ORC object compilation and execution
 ├── xmojo Mojo package and scoped output/display callbacks
-├── mojoorc terminal frontend
-└── MojoInterpreter and xeus-zmq Jupyter frontend
+└── unified xmojo REPL, compiler-driver, and xeus-zmq kernel frontend
 ```
 
 The public boundary is direct C++. There is no subprocess protocol or public C
@@ -93,31 +92,98 @@ Modular's accelerator plugins, then precompiles the resulting `std`. The
 environment computes its runfiles import path and stages the runtime libraries
 without requiring an installed Mojo toolchain.
 
-## Official GPU launcher experiment
+## Wheel layout
 
-The open-source compiler can compile MAX host APIs when the session has a
-`targetAccelerator`, but it cannot emit Apple's closed `air64` backend. The GPU
-experiment therefore keeps interactive host compilation in source-built xmojo
-and builds only the offloaded launcher with the official compiler. A pinned
-`max-core` Pixi environment supplies a matching compiler, stdlib, accelerator
-plugin, and `libmax`; `official_mojo_shared_library` verifies the exact compiler
-version before producing the shared library.
+The platform wheel packages the native frontend, the three runtime dylibs it
+needs, ordinary and interactive-overlay `std` packages, and base and
+Modular-GPU variants of the small `xmojo` package. The base variant contains
+the notebook display API but
+deliberately excludes the MAX-dependent GPU module. Tiny Python console entry
+points locate these resources relative to `site-packages`, set the explicit
+CompilerRT and import paths, then replace themselves with the native process.
+REPL and kernel sessions use the overlay so output reaches their host callbacks;
+`build` and `precompile` switch to the ordinary stdlib so generated artifacts
+retain normal standalone I/O behavior.
+Bazel's much larger compiler-tool runfiles closure is not needed because
+compilation and ORC linking happen in-process. Apart from macOS system libraries
+and frameworks, the installed commands therefore have no runtime dependency on
+Bazel outputs, a source checkout, or an installed Mojo SDK.
 
-The exported launcher receives borrowed pointers to the session's real
-`DeviceContext` and `DeviceBuffer`, enqueues its embedded Metal kernel, and
-synchronizes. The library remains loaded for the session lifetime. ORC's cell
-JITDylib has a current-process symbol generator, so generated host code can
-resolve both the launcher's exported C ABI and runtime symbols already loaded
-in the process.
+The base wheel has no Mojo or MAX package dependency. Its optional `modular-gpu`
+extra depends on the matching `max-core` nightly; WebGPU work does not require
+that extra. When explicitly requested, the launcher locates `max-core` through
+Python package metadata, asks its `gpu-query` for the target accelerator, adds
+its Mojo package directory, and passes the absolute AsyncRT Mojo bindings,
+official compiler, and Modular-root paths into the native frontend. The current
+wheel tag is
+`macosx_11_0_arm64`. Local development builds retain Bazel's debug configuration
+and are intentionally large; published wheels must be built with `-c opt`.
 
-Only the official-compiler action runs locally outside Bazel's sandbox: the
-compiler installation is an intentionally local development toolchain. Its
-Mojo source and imported MAX sources remain declared action inputs, and Metal's
-toolchain environment is scoped to that action rather than invalidating every
-C++ action key. The C++ test itself remains normally sandboxed. Modular's
-global test defaults disable the allocator while requiring allocator-only
-mode, so the test applies Modular's own macOS convention of allowing direct
-Metal allocation.
+The current source/package mapping is deliberately one-to-one:
+
+```text
+Modular source  33cd4694b19649bec7f5acac88b0430371805dc6
+Mojo package    1.1.0.dev2026082005
+MAX package     26.6.0.dev2026082005
+Mojo compiler   Mojo 1.1.0.dev2026082005 (c72288dd)
+```
+
+`bazel/versions.bzl` is authoritative for this mapping and the recorded sibling
+dependency revisions. Updating Modular means updating it, the Pixi lock, the
+official compiler assertion, and the optional MAX requirement together. The
+wheel carries its source-built CompilerRT and compiled stdlib overlay as part of
+xmojo's exact native ABI and output-hook implementation.
+
+`tools/build_wheel.sh` rejects the wrong revision or a dirty worktree for every
+source dependency, checks the duplicated Pixi pin, and builds the wheel with
+`-c opt` and stamping disabled. It defaults to `bazelw`; set
+`XMOJO_BAZEL_WRAPPER=./bazelw2` when that is the server allocated to the current
+session. `XMOJO_ALLOW_DIRTY=1` skips only the xmojo cleanliness check for local
+packaging development; it must not be used for a published build.
+
+On macOS, the wrapper passes `xcode-select`'s developer directory explicitly to
+Bazel's target and exec action environments. This avoids Bazel's
+LaunchServices-based `xcode-locator`, which can reject an otherwise working
+Xcode installation on macOS 26, without modifying Bazel or the selected Xcode.
+Keeping this setting in every wrapper invocation also preserves consistent
+action keys between development and release builds.
+
+## Official GPU compilation
+
+The source-built compiler handles each cell's MAX host code and ORC linking,
+but it cannot emit Apple's closed `air64` backend. `xmojo.gpu.compile[func]`
+therefore calls back into `InteractiveSession`, which invokes the exactly
+matched official Mojo compiler on the session's accumulated declaration
+source. A generated temporary shared library uses `std.compile.compile_info`
+to expose the device object and linkage name; xmojo copies those bytes and
+unloads the temporary library.
+
+The Mojo API loads that object through the cell's real `DeviceContext` and
+returns `CompiledKernel[func, ...]`. It retains the original function value for
+source-name reflection and separately infers its declared argument types. Each
+`enqueue` checks the number and device conversion of its arguments at compile
+time, then reuses MAX's Metal encoder or the generic device encoder. The first
+version supports top-level, nonparameterized, noncapturing functions with an
+ordinary identifier.
+
+Official device artifacts are cached by the exact generated source,
+accelerator target, official compiler contents, and the contents and resolution
+order of every Mojo package on the compiler import paths. Cache entries contain
+only the object bytes and linkage name; each `DeviceContext` still loads its own
+device handle. A miss runs one synchronous `mojo build`, then publishes the
+entry with an atomic rename. Failures and builds whose package fingerprint
+changes during compilation are not cached. Corrupt entries are misses. The
+default platform cache can be overridden with `XMOJO_GPU_CACHE_DIR` or the
+native `--gpu-cache-directory` option.
+
+A Modular GPU process must load its MAX runtime globally before
+`Init::getOrCreateContext`. The native session canonicalizes the configured
+runtime path under a mutex, permanently retains the first successful load,
+reuses that runtime for later sessions, and rejects attempts to mix a different
+MAX runtime into the process. The native `xmojo` frontend accepts
+`--target-accelerator`, `--gpu-runtime-library`, `--mojo-compiler`, and
+`--modular-home`; installed launchers resolve these from the pinned optional
+dependency rather than asking notebook users for paths.
 
 On macOS with Pixi and Xcode's Metal toolchain installed
 (`xcodebuild -downloadComponent MetalToolchain`):
@@ -126,9 +192,9 @@ On macOS with Pixi and Xcode's Metal toolchain installed
 ./bazelw2 test @xmojo//:gpu_shared_library_test
 ```
 
-This proves repeated GPU dispatch and readback through one persistent session.
-It does not yet compile kernels submitted in notebook cells; users must provide
-officially compiled launchers ahead of time.
+This compiles a kernel submitted as cell source, rejects an incorrectly typed
+launch during host compilation, performs repeated Metal dispatch and readback,
+and checks reuse and conflict handling for the process-wide MAX runtime.
 
 `tools/install_cli.sh` uses Bazel's `--script_path` to install lightweight
 launchers rather than copying the binaries without their runtime environment.
@@ -186,10 +252,13 @@ The test checks persistent cells, tooling requests, automatic and explicit
 display, stdout, stderr, and errors over the wire.
 
 The xeus, xeus-zmq, libzmq, cppzmq, and nlohmann-json sibling worktrees remain
-unchanged; CMake stages their static libraries in the ignored `.xmojo-deps`
-directory. xeus-zmq normally uses OpenSSL algorithms which Modular's BoringSSL
-does not provide. Rather than linking two crypto implementations, the build
-substitutes an xmojo-owned authentication implementation supporting the
+unchanged. CMake stages their static libraries under the active Bazel
+output-user root, and the wrapper injects that install tree as the logical
+`@xmojo_deps` repository. This gives concurrent wrappers independent CMake
+build and install trees while retaining Bazel disk-cache reuse for identical
+consumer actions. xeus-zmq normally uses OpenSSL algorithms which Modular's
+BoringSSL does not provide. Rather than linking two crypto implementations, the
+build substitutes an xmojo-owned authentication implementation supporting the
 Jupyter defaults: `none` and `hmac-sha256`. Other schemes fail explicitly.
 
 ## Design constraints
@@ -210,19 +279,28 @@ Jupyter defaults: `none` and `hmac-sha256`. Other schemes fail explicitly.
 - Local sibling worktrees are authoritative during development. CI may check
   out recorded known-good commits for reproduction.
 
-`bazelw` and `bazelw2` use separate default output bases named `xmojo-1` and
-`xmojo-2`. This gives concurrent development sessions independent Bazel
-servers and analysis caches. Both inherit Modular's shared disk cache at
-`~/.cache/bazel-disk-cache`, so identical SPIR-V-enabled actions reuse compiled
-outputs across the two bases. `XMOJO_BAZEL_OUTPUT_BASE` overrides the first;
-`XMOJO_BAZELW2_OUTPUT_BASE` overrides the second.
+`XMOJO_MODULAR_ROOT` selects the absolute Modular worktree used as Bazel's main
+repository; the wrapper refuses to guess. `bazelw` and `bazelw2` use separate
+output-user roots. Bazel then derives a distinct output base for each selected
+Modular worktree, giving concurrent sessions and release trees independent
+servers, analysis caches, and staged xeus dependencies. Both inherit Modular's
+shared disk cache, so identical actions reuse compiled outputs.
+`XMOJO_BAZEL_OUTPUT_USER_ROOT` and `XMOJO_BAZELW2_OUTPUT_USER_ROOT` override the
+two defaults.
+
+The wrappers reject caller overrides of their action environments, injected
+repositories, toolchain, visibility policy, output-user root, and implicit
+`build-mojo` config. These infrastructure settings must remain identical across
+sessions for reliable disk-cache reuse. Ordinary Bazel configurations remain
+available: fastbuild/debug and `-c opt` use independent cached outputs, while
+named configurations such as `--config=asan` may be selected explicitly.
 
 ## Tested dependency revisions
 
 The current compiler and kernel PoC is tested against:
 
 ```text
-modular  4c1ccb5532596d3b6255ce729b6ce04b328e1828
+modular  33cd4694b19649bec7f5acac88b0430371805dc6
 nlohmann-json 55f93686c01528224f448c19128836e7df245f72
 xeus     69d6d1397c68ba0ac1f6ab766dbeebb8a81e5b03
 xeus-zmq 660e6c6ca75badbe55b295cec8c8dd020a5540f0
@@ -234,6 +312,7 @@ When updating Modular, replace the recorded revision rather than supporting
 both old and new APIs, then run:
 
 ```bash
-./bazelw test @xmojo//:session_test @xmojo//:interpreter_test @xmojo//:kernel_test
-./bazelw build @xmojo//:mojoorc @xmojo//:xmojo
+./bazelw test @xmojo//:session_test @xmojo//:interpreter_test @xmojo//:cli_test @xmojo//:kernel_test
+./bazelw test -c opt @xmojo//:wheel_test
+./bazelw build @xmojo//:xmojo
 ```

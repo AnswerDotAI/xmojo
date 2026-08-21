@@ -4,6 +4,7 @@
 // Licensed under the Apache License v2.0 with LLVM Exceptions.
 //===----------------------------------------------------------------------===//
 
+#include "CLI.h"
 #include "xmojo/InteractiveSession.h"
 
 #include <fstream>
@@ -15,6 +16,7 @@
 using xmojo::Diagnostic;
 using xmojo::ExecutionResult;
 using xmojo::InteractiveSession;
+using xmojo::SessionOptions;
 
 namespace {
 
@@ -32,7 +34,7 @@ ExecutionStatus execute(InteractiveSession &session,
                         const std::string &source) {
   auto resultOr = session.execute(source);
   if (resultOr.isError()) {
-    std::cerr << "mojoorc: " << resultOr.getError() << '\n';
+    std::cerr << "xmojo: " << resultOr.getError() << '\n';
     return ExecutionStatus::InfrastructureError;
   }
 
@@ -104,7 +106,7 @@ void printUsage(const char *program) {
 
 } // namespace
 
-int main(int argc, char **argv) {
+int xmojo::runREPL(int argc, char **argv, SessionOptions options) {
   if (argc == 2 && std::string(argv[1]) == "--help") {
     printUsage(argv[0]);
     return 0;
@@ -117,7 +119,7 @@ int main(int argc, char **argv) {
   } else if (argc == 2 && argv[1][0] != '-') {
     source = readFile(argv[1]);
     if (!source) {
-      std::cerr << "mojoorc: unable to read '" << argv[1] << "'\n";
+      std::cerr << "xmojo: unable to read '" << argv[1] << "'\n";
       return 1;
     }
   } else if (!interactive) {
@@ -125,9 +127,9 @@ int main(int argc, char **argv) {
     return 2;
   }
 
-  auto sessionOr = InteractiveSession::create();
+  auto sessionOr = InteractiveSession::create(std::move(options));
   if (sessionOr.isError()) {
-    std::cerr << "mojoorc: " << sessionOr.getError() << '\n';
+    std::cerr << "xmojo: " << sessionOr.getError() << '\n';
     return 1;
   }
   std::unique_ptr<InteractiveSession> session = sessionOr.takeValue();

@@ -6,8 +6,6 @@ bin_dir="${1:-${HOME}/.local/bin}"
 mkdir -p "$bin_dir"
 bin_dir="$(cd "$bin_dir" && pwd)"
 
-for cli in mojoorc xmojo; do
-  "$repo_root/bazelw" run "--script_path=$bin_dir/$cli" "@xmojo//:$cli"
-done
+"$repo_root/bazelw" run "--script_path=$bin_dir/xmojo" @xmojo//:xmojo
 
-echo "Installed mojoorc and xmojo in $bin_dir"
+echo "Installed xmojo in $bin_dir"

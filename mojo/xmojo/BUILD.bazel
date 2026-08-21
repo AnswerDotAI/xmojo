@@ -4,5 +4,15 @@ mojo_library(
     name = "xmojo",
     srcs = glob(["*.mojo"]),
     validate_missing_docs = False,
+    deps = [
+        "//:max",
+        "//:std",
+    ],
+)
+
+mojo_library(
+    name = "xmojo_base",
+    srcs = ["__init__.mojo"],
+    validate_missing_docs = False,
     deps = ["//:std"],
 )
