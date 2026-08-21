@@ -19,6 +19,12 @@ InteractiveSession
 └── unified xmojo REPL, compiler-driver, and xeus-zmq kernel frontend
 ```
 
+The experimental native accelerator runtime is a separate `libxmojo_gpu`
+static library with an IREE-free C++ interface in `include/xmojo/gpu`. Its
+Metal implementation links only IREE base, async, common HAL, FlatCC, and the
+Metal driver from a sibling IREE checkout. It does not link the IREE compiler,
+VM, LLVM, or MLIR and is not yet connected to the installed Mojo API.
+
 The public boundary is direct C++. There is no subprocess protocol or public C
 ABI. Generated code will still use ordinary CompilerRT ABI entry points when
 runtime host services are added.
@@ -38,6 +44,7 @@ dependencies:
 ```text
 git/
 ├── modular/
+├── iree/
 ├── xmojo/
 ├── nlohmann-json/
 ├── xeus/
@@ -46,8 +53,22 @@ git/
 └── cppzmq/
 ```
 
-`XMOJO_MODULAR_ROOT` selects the Modular worktree; the other sibling revisions
-are recorded in `bazel/versions.bzl`.
+`XMOJO_MODULAR_ROOT` selects the Modular worktree; wheel dependency revisions
+are recorded in `bazel/versions.bzl`. The IREE revision used by the experimental
+runtime is recorded in `docs/modular-gpu-pipeline.md` until that library becomes
+a packaged xmojo dependency.
+
+The native accelerator narrative is currently built independently with CMake:
+
+```bash
+tests/iree_hal/test
+```
+
+It discovers and selects Metal devices through `auto`, `metal`, and
+`metal:<ordinal>` selectors, then verifies asynchronous dispatch, persistent
+buffer views, byte-packed push constants, executable replacement, and exact
+readback through `libxmojo_gpu`. See `docs/modular-gpu-pipeline.md` for the
+compiler/runtime boundary and the next integration checkpoints.
 
 ## Interactive compiler PoC
 
