@@ -16,8 +16,9 @@ The wheel is self-contained. It includes the Mojo compiler, runtime, and
 standard library used by xmojo, so it does not require a Modular checkout,
 Bazel, or a separate Mojo installation. It also installs a Jupyter kernelspec.
 
-Each xmojo release targets one exact Mojo nightly. The final component of the
-xmojo version is that nightly's timestamp.
+Each xmojo release targets one exact Mojo nightly. Its numeric release component
+ends with that nightly's timestamp; a `.postN` suffix denotes packaging or
+documentation updates for the same build.
 
 ## Commands
 
