@@ -5,10 +5,10 @@ set -euo pipefail
 script_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 if [[ "$(uname -s)" == "Darwin" ]]; then
-  default_output_base="$HOME/Library/Caches/bazel/xmojo-2"
+  default_output_user_root="$HOME/Library/Caches/bazel/xmojo-user-root-2"
 else
-  default_output_base="${XDG_CACHE_HOME:-$HOME/.cache}/bazel/xmojo-2"
+  default_output_user_root="${XDG_CACHE_HOME:-$HOME/.cache}/bazel/xmojo-user-root-2"
 fi
 
-export XMOJO_BAZEL_OUTPUT_BASE="${XMOJO_BAZELW2_OUTPUT_BASE:-$default_output_base}"
+export XMOJO_BAZEL_OUTPUT_USER_ROOT="${XMOJO_BAZELW2_OUTPUT_USER_ROOT:-$default_output_user_root}"
 exec "$script_root/bazelw" "$@"

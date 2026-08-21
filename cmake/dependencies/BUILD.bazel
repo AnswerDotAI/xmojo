@@ -1,0 +1,53 @@
+load("@rules_cc//cc:cc_import.bzl", "cc_import")
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+
+cc_import(
+    name = "xeus_archive",
+    static_library = "lib/libxeus.a",
+)
+
+cc_import(
+    name = "xeus_zmq_archive",
+    static_library = "lib/libxeus-zmq.a",
+)
+
+cc_import(
+    name = "zmq_archive",
+    static_library = "lib/libzmq.a",
+)
+
+cc_library(
+    name = "xeus",
+    hdrs = glob([
+        "include/nlohmann/**/*.hpp",
+        "include/xeus/**/*.hpp",
+    ]),
+    defines = ["XEUS_STATIC_LIB"],
+    includes = ["include"],
+    linkopts = select({
+        "@platforms//os:macos": ["-framework CoreFoundation"],
+        "//conditions:default": [],
+    }),
+    visibility = ["//visibility:public"],
+    deps = [":xeus_archive"],
+)
+
+cc_library(
+    name = "xeus_zmq",
+    hdrs = glob([
+        "include/xeus-zmq/**/*.hpp",
+        "include/zmq*.h",
+        "include/zmq*.hpp",
+    ]),
+    defines = [
+        "XEUS_ZMQ_STATIC_LIB",
+        "ZMQ_STATIC",
+    ],
+    includes = ["include"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":xeus",
+        ":xeus_zmq_archive",
+        ":zmq_archive",
+    ],
+)

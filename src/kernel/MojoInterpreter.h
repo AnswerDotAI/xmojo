@@ -16,7 +16,8 @@ namespace xmojo {
 
 class MojoInterpreter final : public xeus::xinterpreter {
 public:
-  static M::ErrorOr<std::unique_ptr<MojoInterpreter>> create();
+  static M::ErrorOr<std::unique_ptr<MojoInterpreter>>
+  create(SessionOptions options = {});
 
 private:
   MojoInterpreter() = default;

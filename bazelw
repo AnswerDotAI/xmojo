@@ -3,14 +3,44 @@
 set -euo pipefail
 
 script_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-modular_root="$script_root/../modular"
-if [[ "$(uname -s)" == "Darwin" ]]; then
-  default_output_base="$HOME/Library/Caches/bazel/xmojo-1"
-else
-  default_output_base="${XDG_CACHE_HOME:-$HOME/.cache}/bazel/xmojo-1"
+modular_root="${XMOJO_MODULAR_ROOT:?export XMOJO_MODULAR_ROOT to the Modular checkout to use}"
+if [[ "$modular_root" != /* || ! -x "$modular_root/bazelw" || ! -f "$modular_root/bazel/mojo.MODULE.bazel" ]]; then
+  echo "XMOJO_MODULAR_ROOT must be an absolute Modular checkout path" >&2
+  exit 2
 fi
-output_base="${XMOJO_BAZEL_OUTPUT_BASE:-$default_output_base}"
-startup_args=("--output_base=$output_base")
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  default_output_user_root="$HOME/Library/Caches/bazel/xmojo-user-root-1"
+else
+  default_output_user_root="${XDG_CACHE_HOME:-$HOME/.cache}/bazel/xmojo-user-root-1"
+fi
+output_user_root="${XMOJO_BAZEL_OUTPUT_USER_ROOT:-$default_output_user_root}"
+xeus_deps_root="$output_user_root/xmojo-xeus-deps"
+startup_args=("--output_user_root=$output_user_root")
+action_args=()
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  developer_dir="$(xcode-select -p)"
+  action_args+=(
+    "--action_env=DEVELOPER_DIR=$developer_dir"
+    "--host_action_env=DEVELOPER_DIR=$developer_dir"
+  )
+fi
+
+for arg in "$@"; do
+  if [[ "$arg" == "--" ]]; then break; fi
+  case "$arg" in
+  --action_env | --action_env=* | \
+    --host_action_env | --host_action_env=* | \
+    --inject_repository | --inject_repository=* | \
+    --extra_toolchains | --extra_toolchains=* | \
+    --check_visibility | --check_visibility=* | --nocheck_visibility | \
+    --output_user_root | --output_user_root=* | \
+    --config | --config=build-mojo)
+    echo "bazelw owns $arg; configure it in the wrapper rather than per invocation" >&2
+    exit 2
+    ;;
+  esac
+done
+
 cd "$modular_root"
 
 if [[ $# -eq 0 ]]; then
@@ -22,21 +52,40 @@ shift
 
 case "$command" in
 build | run | test)
+  uses_xmojo=0
+  needs_xeus=0
   for target in "$@"; do
     case "$target" in
     @xmojo//:gpu_launcher | @xmojo//:gpu_shared_library_test)
+      uses_xmojo=1
       pixi install --manifest-path "$script_root/pixi.toml"
+      if [[ "$command" == test ]]; then
+        action_args+=(
+          "--test_env=XMOJO_MOJO_COMPILER=$script_root/.pixi/envs/default/bin/mojo"
+          "--test_env=XMOJO_MODULAR_HOME=$script_root/.pixi/envs/default/share/max"
+        )
+      fi
       ;;
     @xmojo//*)
-      "$script_root/tools/build_xeus_deps.sh"
-      break
+      uses_xmojo=1
+      needs_xeus=1
       ;;
     esac
   done
+  repository_args=("--inject_repository=xmojo=$script_root")
+  if (( uses_xmojo )); then
+    if (( needs_xeus )); then
+      "$script_root/tools/build_xeus_deps.sh" "$xeus_deps_root" "$output_user_root"
+    else
+      "$script_root/tools/build_xeus_deps.sh" "$xeus_deps_root" "$output_user_root" prepare
+    fi
+    repository_args+=("--inject_repository=xmojo_deps=$xeus_deps_root/install")
+  fi
   exec "$modular_root/bazelw" "${startup_args[@]}" "$command" --config=build-mojo \
+    "${action_args[@]}" \
     --check_visibility=false \
     --extra_toolchains=@xmojo//bazel:official_mojo_toolchain \
-    --inject_repository="xmojo=$script_root" "$@"
+    "${repository_args[@]}" "$@"
   ;;
 *)
   exec "$modular_root/bazelw" "${startup_args[@]}" "$command" "$@"

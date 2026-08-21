@@ -5,9 +5,15 @@ load(
     "mojo_overlay_srcs",
     "mojo_test_environment",
 )
-load("//bazel:official_mojo.bzl", "official_mojo_shared_library")
+load("@bazel_skylib//rules:copy_file.bzl", "copy_file")
+load(
+    "//bazel:versions.bzl",
+    "MAX_CORE_VERSION",
+    "WHEEL_PLATFORM",
+    "XMOJO_VERSION",
+)
+load("@rules_python//python:packaging.bzl", "py_wheel")
 load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
-load("@rules_cc//cc:cc_import.bzl", "cc_import")
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
 load("@rules_cc//cc:cc_test.bzl", "cc_test")
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
@@ -67,55 +73,6 @@ mojo_test_environment(
     ],
 )
 
-cc_import(
-    name = "xeus_archive",
-    static_library = ".xmojo-deps/install/lib/libxeus.a",
-)
-
-cc_import(
-    name = "xeus_zmq_archive",
-    static_library = ".xmojo-deps/install/lib/libxeus-zmq.a",
-)
-
-cc_import(
-    name = "zmq_archive",
-    static_library = ".xmojo-deps/install/lib/libzmq.a",
-)
-
-cc_library(
-    name = "xeus",
-    hdrs = glob([
-        ".xmojo-deps/install/include/nlohmann/**/*.hpp",
-        ".xmojo-deps/install/include/xeus/**/*.hpp",
-    ]),
-    defines = ["XEUS_STATIC_LIB"],
-    includes = [".xmojo-deps/install/include"],
-    linkopts = select({
-        "@platforms//os:macos": ["-framework CoreFoundation"],
-        "//conditions:default": [],
-    }),
-    deps = [":xeus_archive"],
-)
-
-cc_library(
-    name = "xeus_zmq",
-    hdrs = glob([
-        ".xmojo-deps/install/include/xeus-zmq/**/*.hpp",
-        ".xmojo-deps/install/include/zmq*.h",
-        ".xmojo-deps/install/include/zmq*.hpp",
-    ]),
-    defines = [
-        "XEUS_ZMQ_STATIC_LIB",
-        "ZMQ_STATIC",
-    ],
-    includes = [".xmojo-deps/install/include"],
-    deps = [
-        ":xeus",
-        ":xeus_zmq_archive",
-        ":zmq_archive",
-    ],
-)
-
 cc_library(
     name = "interactive_session",
     srcs = glob([
@@ -147,79 +104,169 @@ cc_library(
     ],
 )
 
-cc_binary(
-    name = "mojoorc",
-    srcs = ["src/mojoorc.cpp"],
-    data = [":stdlib_environment"],
-    env = {
-        "MODULAR_CRASH_REPORTING_ENABLED": "0",
-        "MODULAR_MOJO_MAX_IMPORT_PATH": "$(COMPUTED_IMPORT_PATH)",
-    },
-    toolchains = [":stdlib_environment"],
-    deps = [":interactive_session"],
-)
-
-official_mojo_shared_library(
-    name = "gpu_launcher",
-    src = "tests/gpu_launcher.mojo",
-    imports = ["@//max/mojo/max:max_srcs"],
-    shared_lib_name = "libxmojo_gpu_test.dylib",
-)
-
 cc_test(
     name = "gpu_shared_library_test",
     srcs = ["tests/gpu_shared_library_test.cpp"],
-    args = ["$(rootpath :gpu_launcher)"],
     data = [
         ":gpu_environment",
-        ":gpu_launcher",
+        "@module_platlib_macos_arm64//:modular/lib/libAsyncRTMojoBindings.dylib",
     ],
+    args = ["$(rootpath @module_platlib_macos_arm64//:modular/lib/libAsyncRTMojoBindings.dylib)"],
     env = {
         "MODULAR_CRASH_REPORTING_ENABLED": "0",
         "MODULAR_DEVICE_CONTEXT_MEMORY_MANAGER_ONLY": "false",
         "MODULAR_DEVICE_CONTEXT_MEMORY_MANAGER_SIZE": "0",
         "MODULAR_MOJO_MAX_IMPORT_PATH": "$(COMPUTED_IMPORT_PATH)",
     },
-    linkopts = select({
-        "@platforms//os:macos": ["-ldl"],
-        "//conditions:default": ["-ldl"],
-    }),
     target_compatible_with = ["@platforms//os:macos"],
     toolchains = [":gpu_environment"],
-    deps = [":interactive_session"],
+    deps = [
+        ":interactive_session",
+        "@llvm-project//third-party/unittest:gtest",
+    ],
 )
 
 cc_library(
     name = "mojo_interpreter",
     srcs = ["src/kernel/MojoInterpreter.cpp"],
     hdrs = ["src/kernel/MojoInterpreter.h"],
+    local_defines = ['XMOJO_VERSION=\\"%s\\"' % XMOJO_VERSION],
     deps = [
         ":interactive_session",
-        ":xeus",
+        "@xmojo_deps//:xeus",
     ],
 )
 
 cc_binary(
     name = "xmojo",
-    srcs = ["src/xmojo.cpp"],
+    srcs = [
+        "src/CLI.h",
+        "src/Kernel.cpp",
+        "src/REPL.cpp",
+        "src/SessionOptionsCLI.h",
+        "src/xmojo.cpp",
+    ],
     data = [
         ":kernelspec",
         ":stdlib_environment",
+        "//mojo/compiler_std:std",
     ],
     env = {
         "MODULAR_CRASH_REPORTING_ENABLED": "0",
+        "MODULAR_MOJO_MAX_COMPILERRT_PATH": "$(COMPILER_RT_PATH)",
         "MODULAR_MOJO_MAX_IMPORT_PATH": "$(COMPUTED_IMPORT_PATH)",
+        "XMOJO_COMPILER_STDLIB_PATH": "$(rootpath //mojo/compiler_std:std)",
     },
+    local_defines = ['XMOJO_VERSION=\\"%s\\"' % XMOJO_VERSION],
     toolchains = [":stdlib_environment"],
     deps = [
+        ":interactive_session",
         ":mojo_interpreter",
-        ":xeus_zmq",
+        "@//KGEN/tools/mojo:mojo_common",
+        "@xmojo_deps//:xeus_zmq",
     ],
 )
 
 filegroup(
     name = "kernelspec",
     srcs = ["share/jupyter/kernels/xmojo/kernel.json"],
+)
+
+copy_file(
+    name = "wheel_xmojo_binary",
+    src = ":xmojo",
+    out = "python/xmojo/bin/xmojo",
+    allow_symlink = True,
+    is_executable = True,
+)
+
+copy_file(
+    name = "wheel_compiler_rt",
+    src = "@//KGEN:CompilerRT",
+    out = "python/xmojo/lib/libKGENCompilerRTShared.dylib",
+)
+
+copy_file(
+    name = "wheel_support_globals",
+    src = "@//Support:Globals",
+    out = "python/xmojo/lib/libMSupportGlobals.dylib",
+)
+
+copy_file(
+    name = "wheel_async_rt_globals",
+    src = "@//AsyncRT:RuntimeGlobals",
+    out = "python/xmojo/lib/libAsyncRTRuntimeGlobals.dylib",
+)
+
+copy_file(
+    name = "wheel_compiler_std",
+    src = "//mojo/compiler_std:std",
+    out = "python/xmojo/mojo/compiler/std.mojoc",
+)
+
+copy_file(
+    name = "wheel_std",
+    src = ":std",
+    out = "python/xmojo/mojo/std.mojoc",
+)
+
+copy_file(
+    name = "wheel_xmojo_package",
+    src = "//mojo/xmojo:xmojo_base",
+    out = "python/xmojo/mojo/base/xmojo.mojoc",
+)
+
+copy_file(
+    name = "wheel_xmojo_modular_gpu_package",
+    src = "//mojo/xmojo:xmojo",
+    out = "python/xmojo/mojo/modular_gpu/xmojo.mojoc",
+)
+
+filegroup(
+    name = "wheel_files",
+    srcs = [
+        "python/xmojo/__init__.py",
+        "python/xmojo/_cli.py",
+        ":wheel_async_rt_globals",
+        ":wheel_compiler_rt",
+        ":wheel_compiler_std",
+        ":wheel_std",
+        ":wheel_support_globals",
+        ":wheel_xmojo_binary",
+        ":wheel_xmojo_modular_gpu_package",
+        ":wheel_xmojo_package",
+    ],
+)
+
+py_wheel(
+    name = "wheel",
+    distribution = "xmojo",
+    version = XMOJO_VERSION,
+    abi = "none",
+    python_tag = "py3",
+    platform = WHEEL_PLATFORM,
+    deps = [":wheel_files"],
+    data_files = {
+        ":kernelspec": "data/share/jupyter/kernels/xmojo/",
+    },
+    description_file = "README.md",
+    entry_points = {
+        "console_scripts": [
+            "xmojo = xmojo._cli:xmojo",
+        ],
+    },
+    extra_requires = {
+        "modular-gpu": ["max-core==" + MAX_CORE_VERSION],
+    },
+    extra_distinfo_files = {
+        "LICENSE": "licenses/LICENSE",
+    },
+    homepage = "https://github.com/AnswerDotAI/xmojo",
+    license = "Apache-2.0 WITH LLVM-exception",
+    python_requires = ">=3.9",
+    stamp = 0,
+    strip_path_prefixes = ["python"],
+    summary = "Interactive Mojo environment using Modular's ORC execution engine",
 )
 
 cc_test(
@@ -259,6 +306,28 @@ cc_test(
 )
 
 sh_test(
+    name = "cli_test",
+    srcs = ["tests/cli_test.py"],
+    args = [
+        "$(rootpath :xmojo)",
+        XMOJO_VERSION,
+    ],
+    data = [
+        ":stdlib_environment",
+        ":xmojo",
+        "//mojo/compiler_std:std",
+    ],
+    env = {
+        "MODULAR_CRASH_REPORTING_ENABLED": "0",
+        "MODULAR_MOJO_MAX_COMPILERRT_PATH": "$(COMPILER_RT_PATH)",
+        "MODULAR_MOJO_MAX_IMPORT_PATH": "$(COMPUTED_IMPORT_PATH)",
+        "XMOJO_COMPILER_STDLIB_PATH": "$(rootpath //mojo/compiler_std:std)",
+    },
+    env_inherit = ["PATH"],
+    toolchains = [":stdlib_environment"],
+)
+
+sh_test(
     name = "kernel_test",
     srcs = ["tests/kernel_test.py"],
     args = ["$(rootpath :xmojo)"],
@@ -272,4 +341,22 @@ sh_test(
     },
     env_inherit = ["PATH"],
     toolchains = [":stdlib_environment"],
+)
+
+sh_test(
+    name = "wheel_test",
+    srcs = ["tests/wheel_test.py"],
+    args = [
+        "$(rootpath :wheel)",
+        "$(rootpath tests/cli_test.py)",
+        "$(rootpath tests/kernel_test.py)",
+        XMOJO_VERSION,
+    ],
+    data = [
+        ":wheel",
+        "tests/cli_test.py",
+        "tests/kernel_test.py",
+    ],
+    env_inherit = ["PATH"],
+    target_compatible_with = ["@platforms//os:macos"],
 )

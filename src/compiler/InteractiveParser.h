@@ -49,6 +49,7 @@ public:
     M::MojoASTDeclRef moduleDecl;
     M::MojoASTDeclRef entryPointDecl;
     std::string source;
+    std::string declarationSource;
     std::string moduleName;
     std::vector<PersistentVar> newVars;
   };

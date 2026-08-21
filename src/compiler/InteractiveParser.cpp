@@ -257,6 +257,7 @@ void partitionCell(StringRef source, SmallVectorImpl<StringRef> &topLevel,
 
 struct WrappedCell {
   std::string source;
+  std::string declarations;
   CellSourceMap map;
 };
 
@@ -537,6 +538,11 @@ wrapCell(StringRef source, const llvm::MemoryBuffer *sourceBuffer,
       findTrailingExpression(state, sourceBuffer);
 
   WrappedCell wrapped;
+  llvm::raw_string_ostream declarations(wrapped.declarations);
+  for (StringRef line : topLevel)
+    declarations << line << '\n';
+  declarations.flush();
+
   llvm::raw_string_ostream output(wrapped.source);
   output << "def " << functionName << "(__xmojo_slots: __xmojo_cell_slots):\n";
   for (size_t index = 0; index < sessionVars.size(); ++index) {
@@ -694,8 +700,7 @@ std::string persistentVariableDeclaration(
 std::string persistentVariableMarkdown(
     const xmojo::InteractiveParser::PersistentVar &variable,
     SharedState &state) {
-  return "### variable `" + variable.name +
-         "`\n\n---\n\n###\n```mojo\n" +
+  return "### variable `" + variable.name + "`\n\n---\n\n###\n```mojo\n" +
          persistentVariableDeclaration(variable, state) + "\n```";
 }
 
@@ -890,8 +895,8 @@ private:
     });
     if (variable == variables.end())
       return {};
-    return {true, persistentVariableMarkdown(
-                      *variable, parserContext->getSharedState())};
+    return {true, persistentVariableMarkdown(*variable,
+                                             parserContext->getSharedState())};
   }
 
   llvm::SourceMgr sourceManager;
@@ -995,6 +1000,7 @@ public:
     Cell cell{M::MojoASTDeclRef(&module),
               M::MojoASTDeclRef(entryPoint),
               source.str(),
+              std::move(wrapped.declarations),
               moduleName.str(),
               {}};
     if (!collectDeclaredVarTypes(*entryPoint, declaredVars, cell.newVars)) {
@@ -1027,11 +1033,10 @@ public:
         continue;
       std::string signature = persistentVariableDeclaration(
           variable, parserContext.getSharedState());
-      result.items.push_back({variable.name,
-                              persistentVariableMarkdown(
-                                  variable, parserContext.getSharedState()),
-                              CompletionKind::Variable,
-                              std::move(signature)});
+      result.items.push_back(
+          {variable.name,
+           persistentVariableMarkdown(variable, parserContext.getSharedState()),
+           CompletionKind::Variable, std::move(signature)});
     }
     return result;
   }

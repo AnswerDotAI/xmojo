@@ -80,10 +80,10 @@ size_t utf8CharacterOffset(llvm::StringRef text, size_t byteOffset) {
 
 } // namespace
 
-M::ErrorOr<std::unique_ptr<MojoInterpreter>> MojoInterpreter::create() {
+M::ErrorOr<std::unique_ptr<MojoInterpreter>>
+MojoInterpreter::create(SessionOptions options) {
   auto interpreter = std::unique_ptr<MojoInterpreter>(new MojoInterpreter());
 
-  SessionOptions options;
   options.output = [instance = interpreter.get()](OutputStream stream,
                                                   llvm::StringRef text) {
     instance->emitOutput(stream, text);
@@ -195,7 +195,7 @@ nl::json MojoInterpreter::is_complete_request_impl(const std::string &code) {
 
 nl::json MojoInterpreter::kernel_info_request_impl() {
   return xeus::create_info_reply(
-      "xmojo", "0.1.0", "mojo", "nightly", "text/x-mojo", ".mojo", "mojo",
+      "xmojo", XMOJO_VERSION, "mojo", "nightly", "text/x-mojo", ".mojo", "mojo",
       std::string("text/x-mojo"), {}, "xmojo ORC Mojo kernel");
 }
 

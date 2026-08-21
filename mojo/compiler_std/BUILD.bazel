@@ -1,0 +1,9 @@
+load("@//bazel:api.bzl", "mojo_library")
+
+mojo_library(
+    name = "std",
+    srcs = ["@//mojo/stdlib/std:std_srcs"],
+    validate_missing_docs = False,
+    visibility = ["//visibility:public"],
+    deps = ["@//KGEN:CompilerRT"],
+)
