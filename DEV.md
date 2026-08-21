@@ -129,13 +129,13 @@ and frameworks, the installed commands therefore have no runtime dependency on
 Bazel outputs, a source checkout, or an installed Mojo SDK.
 
 The base wheel has no Mojo or MAX package dependency. Its optional `modular-gpu`
-extra depends on the matching `max-core` nightly; WebGPU work does not require
-that extra. When explicitly requested, the launcher locates `max-core` through
+extra depends on the matching `max-core` nightly. When explicitly requested,
+the launcher locates `max-core` through
 Python package metadata, asks its `gpu-query` for the target accelerator, adds
 its Mojo package directory, and passes the absolute AsyncRT Mojo bindings,
 official compiler, and Modular-root paths into the native frontend. The current
 wheel tag is
-`macosx_11_0_arm64`. Local development builds retain Bazel's debug configuration
+`macosx_12_0_arm64`. Local development builds retain Bazel's debug configuration
 and are intentionally large; published wheels must be built with `-c opt`.
 
 The current source/package mapping is deliberately one-to-one:
