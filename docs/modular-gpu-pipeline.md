@@ -48,7 +48,7 @@ therefore on the intended compiler extension boundary. A target backend should
 emit a complete target artifact; it should not own a device, allocate buffers,
 or launch work.
 
-The planned runtime boundary is an xmojo-owned C++ API implemented initially by
+The initial runtime boundary is an xmojo-owned C++ API implemented by
 IREE's base runtime, common HAL, and selected HAL drivers:
 
 ```text
@@ -413,11 +413,11 @@ submodule.
 
 The narrative probe is in `tests/iree_hal`. Its CMake file names only four
 direct IREE targets: the proactor pool, FlatCC building support, the Metal
-driver, and the generated Metal executable schema. Their static transitive
-closure produces a 403,384-byte release executable on arm64 macOS. The Mach-O
-`__TEXT` segment is 278,528 bytes. Its only dynamic dependencies are macOS
-system libraries plus Foundation, Metal, and libc++; there is no IREE shared
-library, compiler, VM, LLVM, or MLIR dependency.
+driver, and the generated Metal executable schema. After extraction, the
+xmojo-authored static archive is 41,016 bytes and the complete narrative test
+executable is 412,528 bytes on arm64 macOS. Its only dynamic dependencies are
+macOS system libraries plus Foundation, Metal, and libc++; there is no IREE
+shared library, compiler, VM, LLVM, or MLIR dependency.
 
 Current IREE Metal intentionally targets Metal 3. A macOS 12 deployment failed
 on unguarded `MTLGPUFamilyMetal3` and `MTLLanguageVersion3_0` uses; macOS 13
@@ -500,6 +500,50 @@ should either fix IREE's Metal enumeration to fall back to the system default
 device or establish that this is an Apple API constraint IREE expects clients
 to handle.
 
+### Runtime abstraction checkpoint
+
+The probe has been extracted into the static `libxmojo_gpu` library. Its public
+header contains no IREE or Metal types. The implemented surface is deliberately
+small:
+
+```cpp
+auto available = enumerateDevices();
+auto device = Device::open("auto");       // also metal or metal:0
+auto buffer = device.createBuffer(bytes);
+auto executable = device.load(artifact);
+auto event = executable.dispatch(bindings, constants, workgroups);
+event.wait();
+```
+
+`KernelArtifact` carries the code format and bytes, entry-point name, fixed
+workgroup size, ordered binding access, and exact push-constant byte size. The
+first implemented format is embedded MSL. Driver-specific FlatBuffer
+construction, conversion from byte size to IREE's 32-bit constant count,
+Metal's argument-buffer indices, IREE handles, device-group setup, and the
+current Metal enumeration initialization are confined to `Runtime.mm`.
+
+`Device`, `Buffer`, `Executable`, and `Event` are small shared handles. Buffers
+and executables retain their device. An event retains the device timeline and
+payload value, but does not own the submitted buffers or executable: IREE's
+Metal queue retains the command buffer and all referenced resources until its
+completion handler runs. Discarding an event therefore remains asynchronous.
+A per-device submission mutex keeps timeline allocation and queue submission in
+the same order for concurrent callers; waiting on one payload also covers all
+earlier work on that device timeline.
+
+Bindings are byte-range `BufferView`s rather than whole allocations, which
+supports tensor views and future suballocation without changing the launch
+contract. Push constants cross the runtime boundary as opaque bytes whose size
+must exactly match the artifact and be a multiple of four; the future typed
+compiler ABI owns scalar layout and packing.
+
+The current implementation is honestly Metal-specific. It allocates
+host-visible device-local buffers and packages one MSL entry point per
+executable. These constraints are sufficient for the current story without
+claiming a finished cross-driver memory policy. The public types already place
+them behind the device and artifact boundaries where later Vulkan and
+discrete-device implementations can differ.
+
 ## 8. Recommended xmojo architecture
 
 ### Public Mojo surface
@@ -541,18 +585,14 @@ device and may create a new target variant lazily.
 
 ### C++ runtime boundary
 
-xmojo should own a small modern C++ API:
+xmojo owns a small modern C++ API:
 
 ```cpp
-class Device;
-class Buffer;
-class Executable;
-class Event;
-
-std::vector<DeviceInfo> enumerateDevices();
-Device openDevice(const DeviceSelector &);
-Executable loadExecutable(Device &, const KernelArtifact &);
-Event dispatch(Device &, Executable &, const Dispatch &);
+auto devices = enumerateDevices();
+auto device = Device::open("metal:0");
+auto buffer = device.createBuffer(size);
+auto executable = device.load(artifact);
+auto event = executable.dispatch(bindings, constants, workgroups);
 ```
 
 IREE handles and formats stay private to the implementation. The first
@@ -658,9 +698,10 @@ errors associated with the cell that submitted or awaited the operation.
 3. **Integration measurement — complete for Metal.** The direct build targets,
    linked footprint, dynamic dependencies, initialization requirements, and
    current IREE rough edges are recorded above.
-4. **Introduce the xmojo runtime types.** Extract only the `Device`, `Buffer`,
-   `Executable`, `Event`, and `KernelArtifact` abstractions demonstrated by the
-   test; add backend/device discovery.
+4. **xmojo runtime types and discovery — complete for Metal.** The IREE-free
+   `Device`, `Buffer`, `Executable`, `Event`, and `KernelArtifact` abstractions
+   implement the narrative, including `auto`, `metal`, and `metal:0`
+   selection.
 5. **Fix typed SPIR-V ABI formation.** Move signature analysis and wrapper
    construction before opaque LLVM pointers, with read-only/read-write storage
    buffers and a defined scalar layout. Reject other signatures.
