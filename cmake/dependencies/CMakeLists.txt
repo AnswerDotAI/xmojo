@@ -31,31 +31,32 @@ set_target_properties(
   INTERFACE_INCLUDE_DIRECTORIES "${BORINGSSL_INCLUDE_DIR}"
 )
 
-get_filename_component(SIBLING_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../.." ABSOLUTE)
+get_filename_component(XMOJO_DEFAULT_DEPS_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../.." ABSOLUTE)
+set(XMOJO_DEPS_ROOT "${XMOJO_DEFAULT_DEPS_ROOT}" CACHE PATH "Directory containing xmojo's source dependencies")
 
 foreach(dependency nlohmann-json libzmq cppzmq xeus xeus-zmq)
-  if(NOT EXISTS "${SIBLING_ROOT}/${dependency}/CMakeLists.txt")
-    message(FATAL_ERROR "Missing sibling checkout: ${SIBLING_ROOT}/${dependency}")
+  if(NOT EXISTS "${XMOJO_DEPS_ROOT}/${dependency}/CMakeLists.txt")
+    message(FATAL_ERROR "Missing dependency checkout: ${XMOJO_DEPS_ROOT}/${dependency}")
   endif()
 endforeach()
 
-add_subdirectory("${SIBLING_ROOT}/nlohmann-json" nlohmann-json)
-add_subdirectory("${SIBLING_ROOT}/libzmq" libzmq)
-add_subdirectory("${SIBLING_ROOT}/cppzmq" cppzmq)
-add_subdirectory("${SIBLING_ROOT}/xeus" xeus)
-add_subdirectory("${SIBLING_ROOT}/xeus-zmq" xeus-zmq)
+add_subdirectory("${XMOJO_DEPS_ROOT}/nlohmann-json" nlohmann-json)
+add_subdirectory("${XMOJO_DEPS_ROOT}/libzmq" libzmq)
+add_subdirectory("${XMOJO_DEPS_ROOT}/cppzmq" cppzmq)
+add_subdirectory("${XMOJO_DEPS_ROOT}/xeus" xeus)
+add_subdirectory("${XMOJO_DEPS_ROOT}/xeus-zmq" xeus-zmq)
 
 # xeus-zmq's OpenSSL implementation offers algorithms that BoringSSL does not.
 # The Jupyter protocol only needs hmac-sha256 (or no authentication), so build
 # the transport with our deliberately narrow BoringSSL implementation instead.
 get_target_property(XEUS_ZMQ_SOURCES xeus-zmq-static SOURCES)
 list(REMOVE_ITEM XEUS_ZMQ_SOURCES
-  "${SIBLING_ROOT}/xeus-zmq/src/common/xauthentication.cpp"
+  "${XMOJO_DEPS_ROOT}/xeus-zmq/src/common/xauthentication.cpp"
 )
 set_property(TARGET xeus-zmq-static PROPERTY SOURCES "${XEUS_ZMQ_SOURCES}")
 target_sources(xeus-zmq-static PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/../../src/transport/BoringSSLAuthentication.cpp"
 )
 target_include_directories(xeus-zmq-static PRIVATE
-  "${SIBLING_ROOT}/xeus-zmq/src/common"
+  "${XMOJO_DEPS_ROOT}/xeus-zmq/src/common"
 )

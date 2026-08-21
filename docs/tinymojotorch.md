@@ -478,8 +478,10 @@ dispatches them. It does not optimize tensor programs.
 
 The target compiler, portable kernel subset, artifact contract, and IREE HAL
 adapter are specified in [the accelerator architecture
-document](modular-gpu-pipeline.md). This document intentionally does not repeat
-their driver-specific formats or implementation checkpoints.
+document](modular-gpu-pipeline.md). The compiler-only typed ABI slice now emits
+Vulkan-style SPIR-V interfaces with storage buffers and scalar push constants;
+connecting those artifacts to Metal remains the next accelerator checkpoint.
+This document intentionally does not repeat driver-specific formats.
 
 ## Interactive execution and module export
 
@@ -757,14 +759,17 @@ goal.
 
 ### Phase 0: establish the native runtime boundary
 
-The Metal portion of this phase is complete. The IREE HAL runtime-only
-experiment and xmojo-owned
+The Metal runtime and compiler-only SPIR-V portions of this phase are complete.
+The IREE HAL runtime-only experiment and xmojo-owned
 `Device`/`Buffer`/`Executable`/`Event`/`KernelArtifact` boundary described in
 the accelerator architecture document now cover device selection, byte-range
 buffer views, opaque push constants, asynchronous dispatch, executable
 replacement, and measured packaging and lifetime behavior. Vulkan and
 discrete-device memory behavior remain later hardware-backed extensions of the
-same boundary.
+same boundary. Separately, the registered xmojo compiler target validates a
+typed Mojo kernel ABI and emits Vulkan compute SPIR-V. The remaining phase-zero
+join is SPIR-V-to-MSL translation and loading that result through the existing
+Metal runtime boundary.
 
 ### Phase 1: a CPU tensor semantic slice
 

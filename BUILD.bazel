@@ -8,11 +8,8 @@ load(
 load("@bazel_skylib//rules:copy_file.bzl", "copy_file")
 load(
     "//bazel:versions.bzl",
-    "MAX_CORE_VERSION",
-    "WHEEL_PLATFORM",
     "XMOJO_VERSION",
 )
-load("@rules_python//python:packaging.bzl", "py_wheel")
 load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
 load("@rules_cc//cc:cc_test.bzl", "cc_test")
@@ -74,6 +71,22 @@ mojo_test_environment(
 )
 
 cc_library(
+    name = "spirv_target",
+    srcs = ["src/compiler/XMojoSPIRVTarget.cpp"],
+    alwayslink = True,
+    deps = [
+        "@//KGEN:KGENDialect",
+        "@//KGEN:TargetBackend.headers",
+        "@//KGEN:TargetLowering",
+        "@//KGEN:TargetTraits",
+        "@llvm-project//llvm:Core",
+        "@llvm-project//llvm:Support",
+        "@llvm-project//llvm:Target",
+        "@llvm-project//mlir:IR",
+    ],
+)
+
+cc_library(
     name = "interactive_session",
     srcs = glob([
         "src/compiler/*.cpp",
@@ -83,6 +96,7 @@ cc_library(
     data = ["@//KGEN:CompilerRT"],
     strip_include_prefix = "include",
     deps = [
+        ":spirv_target",
         "@//AsyncRT:CompilerSupport",
         "@//AsyncRT:Runtime",
         "@//Init",
@@ -223,10 +237,8 @@ copy_file(
 )
 
 filegroup(
-    name = "wheel_files",
+    name = "wheel_assets",
     srcs = [
-        "python/xmojo/__init__.py",
-        "python/xmojo/_cli.py",
         ":wheel_async_rt_globals",
         ":wheel_compiler_rt",
         ":wheel_compiler_std",
@@ -238,35 +250,22 @@ filegroup(
     ],
 )
 
-py_wheel(
-    name = "wheel",
-    distribution = "xmojo",
-    version = XMOJO_VERSION,
-    abi = "none",
-    python_tag = "py3",
-    platform = WHEEL_PLATFORM,
-    deps = [":wheel_files"],
-    data_files = {
-        ":kernelspec": "data/share/jupyter/kernels/xmojo/",
+cc_test(
+    name = "spirv_target_test",
+    srcs = ["tests/spirv_target_test.cpp"],
+    data = [":stdlib_environment"],
+    env = {
+        "MODULAR_CRASH_REPORTING_ENABLED": "0",
+        "MODULAR_MOJO_MAX_IMPORT_PATH": "$(COMPUTED_IMPORT_PATH)",
     },
-    description_file = "README.md",
-    entry_points = {
-        "console_scripts": [
-            "xmojo = xmojo._cli:xmojo",
-        ],
-    },
-    extra_requires = {
-        "modular-gpu": ["max-core==" + MAX_CORE_VERSION],
-    },
-    extra_distinfo_files = {
-        "LICENSE": "licenses/LICENSE",
-    },
-    homepage = "https://github.com/AnswerDotAI/xmojo",
-    license = "Apache-2.0 WITH LLVM-exception",
-    python_requires = ">=3.9",
-    stamp = 0,
-    strip_path_prefixes = ["python"],
-    summary = "Interactive Mojo environment using Modular's ORC execution engine",
+    toolchains = [":stdlib_environment"],
+    deps = [
+        ":interactive_session",
+        "@llvm-project//third-party/unittest:gtest",
+    ] + select({
+        "@platforms//os:macos": ["@//bazel/internal:gtest_main_objc_pool_check"],
+        "//conditions:default": ["@llvm-project//third-party/unittest:gtest_main"],
+    }),
 )
 
 cc_test(
@@ -341,22 +340,4 @@ sh_test(
     },
     env_inherit = ["PATH"],
     toolchains = [":stdlib_environment"],
-)
-
-sh_test(
-    name = "wheel_test",
-    srcs = ["tests/wheel_test.py"],
-    args = [
-        "$(rootpath :wheel)",
-        "$(rootpath tests/cli_test.py)",
-        "$(rootpath tests/kernel_test.py)",
-        XMOJO_VERSION,
-    ],
-    data = [
-        ":wheel",
-        "tests/cli_test.py",
-        "tests/kernel_test.py",
-    ],
-    env_inherit = ["PATH"],
-    target_compatible_with = ["@platforms//os:macos"],
 )

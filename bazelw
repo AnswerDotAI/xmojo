@@ -3,11 +3,14 @@
 set -euo pipefail
 
 script_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-modular_root="${XMOJO_MODULAR_ROOT:?export XMOJO_MODULAR_ROOT to the Modular checkout to use}"
+deps_root="${XMOJO_DEPS_ROOT:-$(dirname "$script_root")}"
+modular_root="${XMOJO_MODULAR_ROOT:-$deps_root/modular}"
 if [[ "$modular_root" != /* || ! -x "$modular_root/bazelw" || ! -f "$modular_root/bazel/mojo.MODULE.bazel" ]]; then
   echo "XMOJO_MODULAR_ROOT must be an absolute Modular checkout path" >&2
   exit 2
 fi
+export XMOJO_DEPS_ROOT="$deps_root"
+export XMOJO_MODULAR_ROOT="$modular_root"
 if [[ "$(uname -s)" == "Darwin" ]]; then
   default_output_user_root="$HOME/Library/Caches/bazel/xmojo-user-root-1"
 else
@@ -51,12 +54,12 @@ command="$1"
 shift
 
 case "$command" in
-build | run | test)
+aquery | build | cquery | run | test)
   uses_xmojo=0
   needs_xeus=0
   for target in "$@"; do
     case "$target" in
-    @xmojo//:gpu_launcher | @xmojo//:gpu_shared_library_test)
+    *@xmojo//:gpu_launcher* | *@xmojo//:gpu_shared_library_test*)
       uses_xmojo=1
       pixi install --manifest-path "$script_root/pixi.toml"
       if [[ "$command" == test ]]; then
@@ -66,7 +69,7 @@ build | run | test)
         )
       fi
       ;;
-    @xmojo//*)
+    *@xmojo//*)
       uses_xmojo=1
       needs_xeus=1
       ;;
@@ -74,6 +77,11 @@ build | run | test)
   done
   repository_args=("--inject_repository=xmojo=$script_root")
   if (( uses_xmojo )); then
+    if ! grep -Fqx 'llvm_configure.configure(extra_targets = ["SPIRV"])' \
+      "$modular_root/MODULE.bazel"; then
+      echo 'modular/MODULE.bazel must enable llvm_configure extra target "SPIRV"; see xmojo/DEV.md' >&2
+      exit 2
+    fi
     if (( needs_xeus )); then
       "$script_root/tools/build_xeus_deps.sh" "$xeus_deps_root" "$output_user_root"
     else

@@ -3,7 +3,8 @@
 ## Architecture
 
 All xmojo-authored code lives in this repository. The sibling Modular checkout
-is an unmodified, revision-pinned source dependency:
+is a revision-pinned source dependency. Its compiler sources remain unmodified;
+the root module has one local configuration line enabling LLVM's SPIR-V target:
 
 ```text
 InteractiveSession
@@ -53,10 +54,76 @@ git/
 └── cppzmq/
 ```
 
-`XMOJO_MODULAR_ROOT` selects the Modular worktree; wheel dependency revisions
-are recorded in `bazel/versions.bzl`. The IREE revision used by the experimental
-runtime is recorded in `docs/modular-gpu-pipeline.md` until that library becomes
-a packaged xmojo dependency.
+`XMOJO_DEPS_ROOT` selects the directory containing these worktrees and defaults
+to xmojo's parent directory. `XMOJO_MODULAR_ROOT` can select a Modular checkout
+outside that directory. Wheel dependency revisions are recorded in
+`bazel/versions.bzl`. The IREE revision used by the experimental runtime is
+recorded in `docs/modular-gpu-pipeline.md` until that library becomes a packaged
+xmojo dependency.
+
+### New checkout
+
+Install Xcode and the ordinary development tools `uv`, CMake, and Ninja. xmojo
+supports current Apple Silicon macOS for this development path; it does not
+carry compatibility work for old OS releases.
+
+Clone xmojo and its editable dependencies into one directory:
+
+```bash
+git clone --depth 1 https://github.com/AnswerDotAI/xmojo.git
+git clone --depth 1 https://github.com/modular/modular.git
+git clone --depth 1 https://github.com/iree-org/iree.git
+git clone --depth 1 https://github.com/nlohmann/json.git nlohmann-json
+git clone --depth 1 https://github.com/jupyter-xeus/xeus.git
+git clone --depth 1 https://github.com/jupyter-xeus/xeus-zmq.git
+git clone --depth 1 https://github.com/zeromq/libzmq.git
+git clone --depth 1 https://github.com/zeromq/cppzmq.git
+git -C iree submodule update --init --depth 1 third_party/flatcc
+```
+
+For a reproducible release build, check out the revisions in
+`bazel/versions.bzl` and the IREE revision in `docs/modular-gpu-pipeline.md`.
+Normal development intentionally uses the current local worktrees.
+
+The open Modular build enables only its default LLVM targets. xmojo's SPIR-V
+backend needs one local root-module configuration line. Add it between the
+existing `use_extension` and `use_repo` calls in `modular/MODULE.bazel`:
+
+```starlark
+llvm_configure = use_extension("//bazel/public-patches:llvm_project.bzl", "llvm_configure")
+llvm_configure.configure(extra_targets = ["SPIRV"])
+use_repo(llvm_configure, "llvm-project")
+```
+
+This is the only local Modular edit. It selects code already present in
+Modular's pinned LLVM checkout; xmojo contains the target implementation.
+Keeping it in the root module means every xmojo build uses the same LLVM
+configuration and Bazel cache key.
+
+Set up the editable Python project and its native command with:
+
+```bash
+uv sync
+uv run xmojo --version
+```
+
+The setuptools editable build asks Bazel for a development build of the native
+assets and stages them under the ignored `python/xmojo/_native` directory.
+Python edits remain immediately visible; rerun `uv sync` after native, Mojo, or
+build-configuration changes.
+
+The main development stories are:
+
+```bash
+./bazelw test @xmojo//:session_test @xmojo//:interpreter_test \
+  @xmojo//:cli_test @xmojo//:kernel_test @xmojo//:spirv_target_test
+tests/iree_hal/test
+```
+
+The first command builds the source compiler, stdlib overlay, frontends, and
+compiler-only typed SPIR-V story. The second independently builds the
+runtime-only IREE Metal story. CMake automatically materializes Modular's
+BoringSSL headers and stages the xeus libraries when Bazel first needs them.
 
 The native accelerator narrative is currently built independently with CMake:
 
@@ -69,6 +136,13 @@ It discovers and selects Metal devices through `auto`, `metal`, and
 buffer views, byte-packed push constants, executable replacement, and exact
 readback through `libxmojo_gpu`. See `docs/modular-gpu-pipeline.md` for the
 compiler/runtime boundary and the next integration checkpoints.
+
+The compiler-only accelerator narrative is `@xmojo//:spirv_target_test`. It
+registers xmojo-owned `TargetTraits`, `TargetLowering`, and `TargetBackend`
+implementations, compiles a typed Mojo function through `compile_info`, and
+checks its Vulkan storage-buffer and push-constant interface in textual and
+binary SPIR-V. The internal target value is in `xmojo.spirv`; its raw argument
+annotations are temporary compiler scaffolding rather than a public GPU API.
 
 ## Interactive compiler PoC
 
@@ -132,7 +206,18 @@ Modular's accelerator plugins, then precompiles the resulting `std`. The
 environment computes its runfiles import path and stages the runtime libraries
 without requiring an installed Mojo toolchain.
 
-## Wheel layout
+## Python packaging and wheel layout
+
+`pyproject.toml` is authoritative for Python package metadata, dependencies,
+the console command, and the Jupyter data installation. Setuptools provides the
+PEP 517 and PEP 660 implementation. The small `build_native` command in
+`setup.py` is a regular setuptools build subcommand: editable builds stage a
+development asset set beside the Python sources, while `uv build --wheel`
+writes an optimized asset set into the wheel build directory. Both paths use
+Bazel's `wheel_assets` target and the same Python launcher.
+
+xmojo publishes platform wheels only; it does not publish a source
+distribution. The current wheel tag is `macosx_12_0_arm64`.
 
 The platform wheel packages the native frontend, the three runtime dylibs it
 needs, ordinary and interactive-overlay `std` packages, and base and
@@ -154,10 +239,9 @@ extra depends on the matching `max-core` nightly. When explicitly requested,
 the launcher locates `max-core` through
 Python package metadata, asks its `gpu-query` for the target accelerator, adds
 its Mojo package directory, and passes the absolute AsyncRT Mojo bindings,
-official compiler, and Modular-root paths into the native frontend. The current
-wheel tag is
-`macosx_12_0_arm64`. Local development builds retain Bazel's debug configuration
-and are intentionally large; published wheels must be built with `-c opt`.
+official compiler, and Modular-root paths into the native frontend. Local
+development builds retain Bazel's debug configuration and are intentionally
+large; published wheels use `-c opt`.
 
 The current source/package mapping is deliberately one-to-one:
 
@@ -175,8 +259,9 @@ wheel carries its source-built CompilerRT and compiled stdlib overlay as part of
 xmojo's exact native ABI and output-hook implementation.
 
 `tools/build_wheel.sh` rejects the wrong revision or a dirty worktree for every
-source dependency, checks the duplicated Pixi pin, and builds the wheel with
-`-c opt` and stamping disabled. It defaults to `bazelw`; set
+source dependency, while allowing and checking Modular's single documented
+SPIR-V configuration line. It checks the duplicated Python and Pixi pins and
+invokes `uv build --wheel`. It defaults to `bazelw`; set
 `XMOJO_BAZEL_WRAPPER=./bazelw2` when that is the server allocated to the current
 session. `XMOJO_ALLOW_DIRTY=1` skips only the xmojo cleanliness check for local
 packaging development; it must not be used for a published build.
@@ -235,11 +320,6 @@ On macOS with Pixi and Xcode's Metal toolchain installed
 This compiles a kernel submitted as cell source, rejects an incorrectly typed
 launch during host compilation, performs repeated Metal dispatch and readback,
 and checks reuse and conflict handling for the process-wide MAX runtime.
-
-`tools/install_cli.sh` uses Bazel's `--script_path` to install lightweight
-launchers rather than copying the binaries without their runtime environment.
-The launchers execute the current Bazel outputs directly and therefore need to
-be regenerated after `bazel clean` or an output-base change.
 
 CPU `print()` calls use the stdlib's `print_emit_fn` hook. Generated code calls
 an explicitly registered ORC symbol, which routes stdout and stderr to the
@@ -303,7 +383,8 @@ Jupyter defaults: `none` and `hmac-sha256`. Other schemes fail explicitly.
 
 ## Design constraints
 
-- Keep the Modular checkout free of xmojo patches.
+- Keep Modular's compiler sources free of xmojo patches; the root module may
+  select LLVM's SPIR-V target as documented above.
 - Track Modular private APIs directly; update xmojo rather than adding version
   compatibility code.
 - Use ORC exclusively; do not route execution through LLDB or MCJIT.
@@ -319,12 +400,14 @@ Jupyter defaults: `none` and `hmac-sha256`. Other schemes fail explicitly.
 - Local sibling worktrees are authoritative during development. CI may check
   out recorded known-good commits for reproduction.
 
-`XMOJO_MODULAR_ROOT` selects the absolute Modular worktree used as Bazel's main
-repository; the wrapper refuses to guess. `bazelw` and `bazelw2` use separate
-output-user roots. Bazel then derives a distinct output base for each selected
-Modular worktree, giving concurrent sessions and release trees independent
-servers, analysis caches, and staged xeus dependencies. Both inherit Modular's
-shared disk cache, so identical actions reuse compiled outputs.
+By default the wrapper finds Modular and the CMake dependencies under
+`XMOJO_DEPS_ROOT`, which defaults to xmojo's parent directory.
+`XMOJO_MODULAR_ROOT` overrides just the Modular checkout. `bazelw` and
+`bazelw2` use separate output-user roots. Bazel then derives a distinct output
+base for each selected Modular worktree, giving concurrent sessions and release
+trees independent servers, analysis caches, and staged xeus dependencies. Both
+inherit Modular's shared disk cache, so identical actions reuse compiled
+outputs.
 `XMOJO_BAZEL_OUTPUT_USER_ROOT` and `XMOJO_BAZELW2_OUTPUT_USER_ROOT` override the
 two defaults.
 
@@ -352,7 +435,8 @@ When updating Modular, replace the recorded revision rather than supporting
 both old and new APIs, then run:
 
 ```bash
-./bazelw test @xmojo//:session_test @xmojo//:interpreter_test @xmojo//:cli_test @xmojo//:kernel_test
-./bazelw test -c opt @xmojo//:wheel_test
+./bazelw test @xmojo//:session_test @xmojo//:interpreter_test @xmojo//:cli_test @xmojo//:kernel_test @xmojo//:spirv_target_test
 ./bazelw build @xmojo//:xmojo
+uv build --wheel
+python tests/wheel_test.py dist/xmojo-*.whl tests/cli_test.py tests/kernel_test.py 0.0.2026082005.post1
 ```
