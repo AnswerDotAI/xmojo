@@ -36,5 +36,4 @@ class CLIStory(unittest.TestCase):
             self.run_ok(xmojo, "precompile", package, "-o", artifact)
             self.assertGreater(artifact.stat().st_size, 0)
 
-
 if __name__ == "__main__": unittest.main(argv=sys.argv[:1])

@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+test_dir=$(cd -- "$(dirname -- "$0")" && pwd)
+git_root=$(cd -- "$test_dir/../../.." && pwd)
+iree_root=${XMOJO_IREE_ROOT:-"$git_root/iree"}
+build_dir=${XMOJO_IREE_BUILD_DIR:-"${TMPDIR:-/tmp}/xmojo-iree-hal-probe"}
+
+cmake -G Ninja -S "$test_dir" -B "$build_dir" -DXMOJO_IREE_ROOT="$iree_root"
+cmake --build "$build_dir" --target xmojo_iree_hal_probe
+ctest --test-dir "$build_dir" --output-on-failure

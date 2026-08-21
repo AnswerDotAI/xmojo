@@ -6,7 +6,7 @@ precompilation, and a Jupyter kernel with persistent state and rich display.
 
 ## Install
 
-xmojo currently supports Apple Silicon:
+xmojo currently supports Apple Silicon on macOS 12 or newer:
 
 ```bash
 uv pip install xmojo
