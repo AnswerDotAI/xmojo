@@ -75,23 +75,24 @@ Published wheels remain macOS-only. The experimental IREE runtime story is
 currently Metal-only; the interactive engine and compiler-only SPIR-V story
 build and run on both operating systems.
 
-Clone xmojo and its editable dependencies into one directory:
+Clone xmojo, then let its setup helper create the pinned sibling worktrees and
+enable LLVM's SPIR-V target in Modular:
 
 ```bash
 git clone --depth 1 https://github.com/AnswerDotAI/xmojo.git
-git clone --depth 1 https://github.com/modular/modular.git
-git clone --depth 1 https://github.com/iree-org/iree.git
-git clone --depth 1 https://github.com/nlohmann/json.git nlohmann-json
-git clone --depth 1 https://github.com/jupyter-xeus/xeus.git
-git clone --depth 1 https://github.com/jupyter-xeus/xeus-zmq.git
-git clone --depth 1 https://github.com/zeromq/libzmq.git
-git clone --depth 1 https://github.com/zeromq/cppzmq.git
-git -C iree submodule update --init --depth 1 third_party/flatcc
+cd xmojo
+tools/setup_source_deps.sh
 ```
 
-For a reproducible release build, check out the revisions in
-`bazel/versions.bzl` and the IREE revision in `docs/modular-gpu-pipeline.md`.
-Normal development intentionally uses the current local worktrees.
+The helper clones only missing dependencies and leaves existing worktrees
+untouched, so normal development can continue to use current local revisions.
+The experimental IREE runtime additionally needs the revision recorded in
+`docs/modular-gpu-pipeline.md` and its FlatCC submodule:
+
+```bash
+git clone --depth 1 https://github.com/iree-org/iree.git ../iree
+git -C ../iree submodule update --init --depth 1 third_party/flatcc
+```
 
 The open Modular build enables only its default LLVM targets. xmojo's SPIR-V
 backend needs one local root-module configuration line. Add it between the
@@ -103,10 +104,10 @@ llvm_configure.configure(extra_targets = ["SPIRV"])
 use_repo(llvm_configure, "llvm-project")
 ```
 
-This is the only local Modular edit. It selects code already present in
-Modular's pinned LLVM checkout; xmojo contains the target implementation.
-Keeping it in the root module means every xmojo build uses the same LLVM
-configuration and Bazel cache key.
+This is the only local Modular edit, and `tools/setup_source_deps.sh` applies it
+idempotently. It selects code already present in Modular's pinned LLVM checkout;
+xmojo contains the target implementation. Keeping it in the root module means
+every xmojo build uses the same LLVM configuration and Bazel cache key.
 
 Set up the editable Python project and its native command with:
 

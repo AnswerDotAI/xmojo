@@ -1,0 +1,38 @@
+name: Build
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x86_64
+            runner: ubicloud-standard-8
+          - name: linux-arm64
+            runner: ubicloud-standard-8-arm
+          - name: macos-arm64
+            runner: macos-26
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install Linux build tools
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build pkg-config
+      - name: Set up source dependencies
+        run: tools/setup_source_deps.sh
+      - name: Build xmojo
+        run: ./bazelw build --config=public-cache @xmojo//:xmojo
