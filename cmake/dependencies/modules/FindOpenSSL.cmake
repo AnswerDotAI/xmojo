@@ -1,0 +1,5 @@
+# xmojo provides OpenSSL::Crypto using Modular's BoringSSL headers.
+set(OpenSSL_FOUND TRUE)
+set(OPENSSL_FOUND TRUE)
+set(OPENSSL_INCLUDE_DIR "${BORINGSSL_INCLUDE_DIR}")
+set(OPENSSL_INCLUDE_DIRS "${BORINGSSL_INCLUDE_DIR}")

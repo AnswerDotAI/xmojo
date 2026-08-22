@@ -63,9 +63,17 @@ xmojo dependency.
 
 ### New checkout
 
-Install Xcode and the ordinary development tools `uv`, CMake, and Ninja. xmojo
-supports current Apple Silicon macOS for this development path; it does not
-carry compatibility work for old OS releases.
+Install `uv`, CMake, and Ninja. macOS development also needs Xcode. On
+Ubuntu/Debian Linux, the native prerequisites are:
+
+```bash
+sudo apt-get install cmake ninja-build pkg-config
+```
+
+Source development supports Apple Silicon macOS and Linux on ARM64 or x86-64.
+Published wheels remain macOS-only. The experimental IREE runtime story is
+currently Metal-only; the interactive engine and compiler-only SPIR-V story
+build and run on both operating systems.
 
 Clone xmojo and its editable dependencies into one directory:
 
@@ -121,9 +129,23 @@ tests/iree_hal/test
 ```
 
 The first command builds the source compiler, stdlib overlay, frontends, and
-compiler-only typed SPIR-V story. The second independently builds the
-runtime-only IREE Metal story. CMake automatically materializes Modular's
-BoringSSL headers and stages the xeus libraries when Bazel first needs them.
+compiler-only typed SPIR-V story. Its Python tests use the `python` on `PATH`
+and require `conkernelclient`. In the AnswerAI development workspace, activate
+the workspace environment before running them:
+
+```bash
+source ~/aai-ws/.venv/bin/activate
+```
+
+The second command independently builds the runtime-only IREE Metal story and
+is only run on macOS.
+
+CMake automatically materializes Modular's BoringSSL headers and stages the
+xeus libraries when Bazel first needs them. On Linux it compiles those
+libraries with Modular's pinned Clang and Ubuntu 22.04 sysroot, matching the ABI
+used by the final Bazel link. An xmojo-owned UUID implementation uses the same
+BoringSSL randomness, so the host distribution's `libuuid` cannot leak across
+that boundary.
 
 The native accelerator narrative is currently built independently with CMake:
 
