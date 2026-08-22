@@ -16,6 +16,11 @@ cc_import(
     static_library = "lib/libzmq.a",
 )
 
+cc_import(
+    name = "xmojo_uuid_archive",
+    static_library = "lib/libxmojo_uuid.a",
+)
+
 cc_library(
     name = "xeus",
     hdrs = glob([
@@ -29,7 +34,10 @@ cc_library(
         "//conditions:default": [],
     }),
     visibility = ["//visibility:public"],
-    deps = [":xeus_archive"],
+    deps = [":xeus_archive"] + select({
+        "@platforms//os:linux": [":xmojo_uuid_archive"],
+        "//conditions:default": [],
+    }),
 )
 
 cc_library(

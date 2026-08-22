@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.20)
 project(xmojo_dependencies LANGUAGES C CXX)
 
+list(PREPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/modules")
+
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 set(BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(JSON_BuildTests OFF CACHE BOOL "" FORCE)
@@ -30,6 +32,17 @@ set_target_properties(
   OpenSSL::Crypto PROPERTIES
   INTERFACE_INCLUDE_DIRECTORIES "${BORINGSSL_INCLUDE_DIR}"
 )
+
+if(UNIX AND NOT APPLE)
+  add_library(xmojo_uuid STATIC UUID.cpp)
+  target_include_directories(xmojo_uuid PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/include"
+    "${BORINGSSL_INCLUDE_DIR}"
+  )
+  set(LIBUUID_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/include" CACHE PATH "" FORCE)
+  set(LIBUUID_LIBRARY xmojo_uuid CACHE STRING "" FORCE)
+  install(TARGETS xmojo_uuid EXPORT xeus-targets ARCHIVE DESTINATION lib)
+endif()
 
 get_filename_component(XMOJO_DEFAULT_DEPS_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../.." ABSOLUTE)
 set(XMOJO_DEPS_ROOT "${XMOJO_DEFAULT_DEPS_ROOT}" CACHE PATH "Directory containing xmojo's source dependencies")
