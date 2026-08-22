@@ -46,7 +46,7 @@ Linux)
   fi
   if [[ ! -x "$output_base/external/+http_archive+$clang_repo/bin/clang++" ]]; then
     "$modular_root/bazelw" --output_user_root="$output_user_root" \
-      query "@$clang_repo//:bin/clang++" >/dev/null
+      query "@$clang_repo//:bin/clang" >/dev/null
   fi
   sysroot="$output_base/external/$sysroot_repo+/sysroot"
   clang_root="$output_base/external/+http_archive+$clang_repo"

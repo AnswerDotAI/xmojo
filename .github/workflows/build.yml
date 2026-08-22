@@ -35,4 +35,11 @@ jobs:
       - name: Set up source dependencies
         run: tools/setup_source_deps.sh
       - name: Build xmojo
-        run: ./bazelw build --config=public-cache @xmojo//:xmojo
+        env:
+          BB_DISABLE_SIDECAR: 1
+        run: |
+          ./bazelw build \
+            --config=public-cache \
+            --remote_header=x-buildbuddy-api-key=gJPttl2LQEONgD2aKziQ \
+            --remote_upload_local_results=false \
+            @xmojo//:xmojo
