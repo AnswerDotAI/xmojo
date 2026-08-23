@@ -49,9 +49,7 @@ jobs:
         run: tools/build_wheel.sh
       - name: Check manylinux compatibility
         if: runner.os == 'Linux'
-        run: |
-          uv pip install --system auditwheel
-          auditwheel show dist/*.whl
+        run: uv tool run auditwheel show dist/*.whl
       - uses: actions/upload-artifact@v7
         with:
           name: wheel-${{ matrix.name }}
