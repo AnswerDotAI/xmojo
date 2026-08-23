@@ -4,6 +4,8 @@
 engine. One command provides a terminal REPL, native compilation, package
 precompilation, and a Jupyter kernel with persistent state and rich display.
 
+xmojo is created by Jeremy Howard from Answer.AI. It is not a Modular project.
+
 ## Install
 
 xmojo supports Apple Silicon on macOS 12 or newer, and ARM64 or x86-64 Linux
