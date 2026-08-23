@@ -1,10 +1,7 @@
-name: Build
+name: Release
 
 on:
-  workflow_dispatch:
-  pull_request:
   push:
-    branches: [main]
     tags: ['v*']
 
 permissions:
@@ -31,7 +28,6 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Validate release tag
-        if: startsWith(github.ref, 'refs/tags/')
         run: |
           source bazel/versions.bzl
           test "$GITHUB_REF_NAME" = "v$XMOJO_VERSION"
@@ -57,7 +53,6 @@ jobs:
           if-no-files-found: error
 
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
     needs: build
     runs-on: ubuntu-latest
     environment: pypi
