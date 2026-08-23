@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "xmojo"
-version = "0.0.2026082005.post1"
+version = "0.0.2026082005.post2"
 description = "Interactive Mojo environment using Modular's ORC execution engine"
 readme = "README.md"
 requires-python = ">=3.9"
