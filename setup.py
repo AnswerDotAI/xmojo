@@ -1,7 +1,7 @@
 import ast, os, platform, shutil, subprocess
 from pathlib import Path
 
-from setuptools import Command, setup
+from setuptools import Command, Distribution, setup
 from setuptools.command.bdist_wheel import bdist_wheel as _bdist_wheel
 from setuptools.command.build import build as _build
 
@@ -21,9 +21,16 @@ def _wrapper(environment):
     return path if path.is_absolute() else root / path
 
 
+def _wheel_platform():
+    system, machine = platform.system(), platform.machine()
+    if (system, machine) == ("Darwin", "arm64"): name = "WHEEL_PLATFORM_MACOS_ARM64"
+    elif system == "Linux" and machine in ("aarch64", "x86_64"): name = f"WHEEL_PLATFORM_LINUX_{machine.upper()}"
+    else: raise RuntimeError(f"xmojo wheels do not support {system} {machine}")
+    return _bzl_value(name)
+
+
 def _build_assets(optimized):
-    if platform.system() != "Darwin" or platform.machine() != "arm64":
-        raise RuntimeError("xmojo wheels currently support only Apple Silicon")
+    _wheel_platform()
 
     environment = os.environ.copy()
     deps_root = Path(environment.get("XMOJO_DEPS_ROOT", root.parent)).resolve()
@@ -81,12 +88,12 @@ class build(_build):
     sub_commands = [("build_native", None), *_build.sub_commands]
 
 
+class BinaryDistribution(Distribution):
+    def has_ext_modules(self): return True
+
+
 class bdist_wheel(_bdist_wheel):
-    def finalize_options(self):
-        super().finalize_options()
-        self.root_is_pure = False
-
-    def get_tag(self): return "py3", "none", _bzl_value("WHEEL_PLATFORM")
+    def get_tag(self): return "py3", "none", _wheel_platform()
 
 
-setup(cmdclass=dict(bdist_wheel=bdist_wheel, build=build, build_native=build_native))
+setup(cmdclass=dict(bdist_wheel=bdist_wheel, build=build, build_native=build_native), distclass=BinaryDistribution)

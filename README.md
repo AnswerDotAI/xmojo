@@ -6,7 +6,8 @@ precompilation, and a Jupyter kernel with persistent state and rich display.
 
 ## Install
 
-xmojo currently supports Apple Silicon on macOS 12 or newer:
+xmojo supports Apple Silicon on macOS 12 or newer, and ARM64 or x86-64 Linux
+systems with glibc 2.35 or newer:
 
 ```bash
 uv pip install xmojo
@@ -211,7 +212,6 @@ Select **Mojo (xmojo, Modular GPU)** in Jupyter.
 
 ## Current limitations
 
-- Published wheels currently support Apple Silicon only.
 - Interrupting a running cell is not yet supported.
 - Rich display currently supports textual MIME data, without binary buffers,
   display metadata, or transient display IDs.

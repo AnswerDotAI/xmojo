@@ -70,10 +70,10 @@ Ubuntu/Debian Linux, the native prerequisites are:
 sudo apt-get install cmake ninja-build pkg-config
 ```
 
-Source development supports Apple Silicon macOS and Linux on ARM64 or x86-64.
-Published wheels remain macOS-only. The experimental IREE runtime story is
-currently Metal-only; the interactive engine and compiler-only SPIR-V story
-build and run on both operating systems.
+Source development and published wheels support Apple Silicon macOS and Linux
+on ARM64 or x86-64. The experimental IREE runtime story is currently
+Metal-only; the interactive engine and compiler-only SPIR-V story build and run
+on both operating systems.
 
 Clone xmojo, then let its setup helper create the pinned sibling worktrees and
 enable LLVM's SPIR-V target in Modular:
@@ -240,9 +240,10 @@ writes an optimized asset set into the wheel build directory. Both paths use
 Bazel's `wheel_assets` target and the same Python launcher.
 
 xmojo publishes platform wheels only; it does not publish a source
-distribution. The current wheel tag is `macosx_12_0_arm64`.
+distribution. The wheel tags are `macosx_12_0_arm64`,
+`manylinux_2_35_aarch64`, and `manylinux_2_35_x86_64`.
 
-The platform wheel packages the native frontend, the three runtime dylibs it
+Each platform wheel packages the native frontend, the three runtime libraries it
 needs, ordinary and interactive-overlay `std` packages, and base and
 Modular-GPU variants of the small `xmojo` package. The base variant contains
 the notebook display API but
@@ -253,9 +254,9 @@ REPL and kernel sessions use the overlay so output reaches their host callbacks;
 `build` and `precompile` switch to the ordinary stdlib so generated artifacts
 retain normal standalone I/O behavior.
 Bazel's much larger compiler-tool runfiles closure is not needed because
-compilation and ORC linking happen in-process. Apart from macOS system libraries
-and frameworks, the installed commands therefore have no runtime dependency on
-Bazel outputs, a source checkout, or an installed Mojo SDK.
+compilation and ORC linking happen in-process. Apart from platform system
+libraries and frameworks, the installed commands therefore have no runtime
+dependency on Bazel outputs, a source checkout, or an installed Mojo SDK.
 
 The base wheel has no Mojo or MAX package dependency. Its optional `modular-gpu`
 extra depends on the matching `max-core` nightly. When explicitly requested,
@@ -288,6 +289,16 @@ invokes `uv build --wheel`. It defaults to `bazelw`; set
 `XMOJO_BAZEL_WRAPPER=./bazelw2` when that is the server allocated to the current
 session. `XMOJO_ALLOW_DIRTY=1` skips only the xmojo cleanliness check for local
 packaging development; it must not be used for a published build.
+
+GitHub Actions builds and retains all three platform wheels for pull requests
+and main-branch pushes. Linux jobs use `auditwheel` to verify the declared
+manylinux ABI. A `v<version>` tag collects those wheels into one GitHub release
+and publishes them to PyPI through its `pypi` trusted-publishing environment.
+The `[tool.fastship]` configuration makes `ship-release` push that tag and then
+bump both `pyproject.toml` and `bazel/versions.bzl` together. Set
+`XMOJO_PUBLIC_CACHE=1` to use Modular's authenticated public BuildBuddy cache in
+read-only mode; CI does this while local builds normally use the shared Bazel
+disk cache.
 
 On macOS, the wrapper passes `xcode-select`'s developer directory explicitly to
 Bazel's target and exec action environments. This avoids Bazel's

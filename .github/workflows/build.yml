@@ -5,6 +5,7 @@ on:
   pull_request:
   push:
     branches: [main]
+    tags: ['v*']
 
 permissions:
   contents: read
@@ -29,17 +30,50 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v7
+      - name: Validate release tag
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          source bazel/versions.bzl
+          test "$GITHUB_REF_NAME" = "v$XMOJO_VERSION"
+      - uses: astral-sh/setup-uv@v10.0.1
       - name: Install Linux build tools
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y cmake ninja-build pkg-config
       - name: Set up source dependencies
         run: tools/setup_source_deps.sh
-      - name: Build xmojo
+      - name: Build wheel
         env:
           BB_DISABLE_SIDECAR: 1
+          XMOJO_PUBLIC_CACHE: 1
+        run: tools/build_wheel.sh
+      - name: Check manylinux compatibility
+        if: runner.os == 'Linux'
         run: |
-          ./bazelw build \
-            --config=public-cache \
-            --remote_header=x-buildbuddy-api-key=gJPttl2LQEONgD2aKziQ \
-            --remote_upload_local_results=false \
-            @xmojo//:xmojo
+          uv pip install --system auditwheel
+          auditwheel show dist/*.whl
+      - uses: actions/upload-artifact@v7
+        with:
+          name: wheel-${{ matrix.name }}
+          path: dist/*.whl
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v3
+        with:
+          files: dist/*
+          generate_release_notes: true
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/

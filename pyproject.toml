@@ -51,6 +51,10 @@ cache-keys = [
 [tool.uv.sources]
 max-core = {index = "modular-nightly"}
 
+[tool.fastship]
+release = "tag"
+version-files = ["bazel/versions.bzl"]
+
 [[tool.uv.index]]
 name = "modular-nightly"
 url = "https://whl.modular.com/nightly/simple/"

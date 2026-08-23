@@ -43,7 +43,8 @@ def _run(name):
         imports.append(str(max_imports))
         args = [*gpu_args, *args]
     os.environ["MODULAR_CRASH_REPORTING_ENABLED"] = "0"
-    os.environ["MODULAR_MOJO_MAX_COMPILERRT_PATH"] = str(root / "lib" / "libKGENCompilerRTShared.dylib")
+    suffix = ".dylib" if sys.platform == "darwin" else ".so"
+    os.environ["MODULAR_MOJO_MAX_COMPILERRT_PATH"] = str(root / "lib" / f"libKGENCompilerRTShared{suffix}")
     os.environ["XMOJO_COMPILER_STDLIB_PATH"] = str(root / "mojo" / "compiler" / "std.mojoc")
     imports.append(os.environ.get("MODULAR_MOJO_MAX_IMPORT_PATH", ""))
     os.environ["MODULAR_MOJO_MAX_IMPORT_PATH"] = ",".join(filter(None, imports))

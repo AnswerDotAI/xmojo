@@ -195,21 +195,45 @@ copy_file(
 )
 
 copy_file(
-    name = "wheel_compiler_rt",
+    name = "wheel_compiler_rt_macos",
     src = "@//KGEN:CompilerRT",
     out = "python/xmojo/lib/libKGENCompilerRTShared.dylib",
+    target_compatible_with = ["@platforms//os:macos"],
 )
 
 copy_file(
-    name = "wheel_support_globals",
+    name = "wheel_compiler_rt_linux",
+    src = "@//KGEN:CompilerRT",
+    out = "python/xmojo/lib/libKGENCompilerRTShared.so",
+    target_compatible_with = ["@platforms//os:linux"],
+)
+
+copy_file(
+    name = "wheel_support_globals_macos",
     src = "@//Support:Globals",
     out = "python/xmojo/lib/libMSupportGlobals.dylib",
+    target_compatible_with = ["@platforms//os:macos"],
 )
 
 copy_file(
-    name = "wheel_async_rt_globals",
+    name = "wheel_support_globals_linux",
+    src = "@//Support:Globals",
+    out = "python/xmojo/lib/libMSupportGlobals.so",
+    target_compatible_with = ["@platforms//os:linux"],
+)
+
+copy_file(
+    name = "wheel_async_rt_globals_macos",
     src = "@//AsyncRT:RuntimeGlobals",
     out = "python/xmojo/lib/libAsyncRTRuntimeGlobals.dylib",
+    target_compatible_with = ["@platforms//os:macos"],
+)
+
+copy_file(
+    name = "wheel_async_rt_globals_linux",
+    src = "@//AsyncRT:RuntimeGlobals",
+    out = "python/xmojo/lib/libAsyncRTRuntimeGlobals.so",
+    target_compatible_with = ["@platforms//os:linux"],
 )
 
 copy_file(
@@ -239,15 +263,23 @@ copy_file(
 filegroup(
     name = "wheel_assets",
     srcs = [
-        ":wheel_async_rt_globals",
-        ":wheel_compiler_rt",
         ":wheel_compiler_std",
         ":wheel_std",
-        ":wheel_support_globals",
         ":wheel_xmojo_binary",
         ":wheel_xmojo_modular_gpu_package",
         ":wheel_xmojo_package",
-    ],
+    ] + select({
+        "@platforms//os:macos": [
+            ":wheel_async_rt_globals_macos",
+            ":wheel_compiler_rt_macos",
+            ":wheel_support_globals_macos",
+        ],
+        "@platforms//os:linux": [
+            ":wheel_async_rt_globals_linux",
+            ":wheel_compiler_rt_linux",
+            ":wheel_support_globals_linux",
+        ],
+    }),
 )
 
 cc_test(

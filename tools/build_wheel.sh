@@ -37,12 +37,14 @@ check_modular() {
   fi
 }
 
-deps_root="${XMOJO_DEPS_ROOT:-$(dirname "$root")}"
+deps_root="${XMOJO_DEPS_ROOT:-$(dirname "$root")}" 
 modular_root="${XMOJO_MODULAR_ROOT:-$deps_root/modular}"
-if [[ "$(uname -s)" != "Darwin" || "$(uname -m)" != "arm64" ]]; then
-  echo "the current wheel target is only defined for Apple Silicon" >&2
-  exit 1
-fi
+case "$(uname -s):$(uname -m)" in
+  Darwin:arm64) wheel_platform="$WHEEL_PLATFORM_MACOS_ARM64" ;;
+  Linux:aarch64) wheel_platform="$WHEEL_PLATFORM_LINUX_AARCH64" ;;
+  Linux:x86_64) wheel_platform="$WHEEL_PLATFORM_LINUX_X86_64" ;;
+  *) echo "xmojo wheels do not support $(uname -s) $(uname -m)" >&2; exit 1 ;;
+esac
 
 check_modular "$modular_root"
 check_repo nlohmann-json "$deps_root/nlohmann-json" "$NLOHMANN_JSON_REVISION"
@@ -64,17 +66,14 @@ grep -Fqx "modular-gpu = [\"max-core==${MAX_CORE_VERSION}\"]" "$root/pyproject.t
   echo "pyproject.toml does not pin max-core==$MAX_CORE_VERSION" >&2
   exit 1
 }
-grep -Fq "max-core-${MAX_CORE_VERSION}-release.conda" "$root/pixi.lock" || {
-  echo "pixi.lock does not contain max-core==$MAX_CORE_VERSION" >&2
-  exit 1
-}
-
 export XMOJO_DEPS_ROOT="$deps_root"
 export XMOJO_MODULAR_ROOT="$modular_root"
 uv build --wheel
 
-wheel="$root/dist/xmojo-${XMOJO_VERSION}-py3-none-${WHEEL_PLATFORM}.whl"
+wheel="$root/dist/xmojo-${XMOJO_VERSION}-py3-none-${wheel_platform}.whl"
 [[ -f "$wheel" ]] || { echo "wheel output not found at $wheel" >&2; exit 1; }
-checksum="$(shasum -a 256 "$wheel")"
+if command -v sha256sum >/dev/null; then checksum="$(sha256sum "$wheel")"
+else checksum="$(shasum -a 256 "$wheel")"
+fi
 echo "$wheel"
 echo "sha256 ${checksum%% *}"

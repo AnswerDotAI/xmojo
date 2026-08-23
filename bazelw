@@ -20,6 +20,13 @@ output_user_root="${XMOJO_BAZEL_OUTPUT_USER_ROOT:-$default_output_user_root}"
 xeus_deps_root="$output_user_root/xmojo-xeus-deps"
 startup_args=("--output_user_root=$output_user_root")
 action_args=()
+if [[ "${XMOJO_PUBLIC_CACHE:-0}" == "1" ]]; then
+  action_args+=(
+    "--config=public-cache"
+    "--remote_header=x-buildbuddy-api-key=gJPttl2LQEONgD2aKziQ"
+    "--remote_upload_local_results=false"
+  )
+fi
 if [[ "$(uname -s)" == "Darwin" ]]; then
   developer_dir="$(xcode-select -p)"
   action_args+=(
