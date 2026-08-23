@@ -43,6 +43,7 @@ jobs:
         run: tools/setup_source_deps.sh
       - name: Build wheel
         env:
+          BBUDDY_API_KEY: ${{ secrets.BBUDDY_API_KEY }}
           BB_DISABLE_SIDECAR: 1
           XMOJO_PUBLIC_CACHE: 1
         run: tools/build_wheel.sh

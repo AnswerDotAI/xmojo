@@ -20,7 +20,16 @@ output_user_root="${XMOJO_BAZEL_OUTPUT_USER_ROOT:-$default_output_user_root}"
 xeus_deps_root="$output_user_root/xmojo-xeus-deps"
 startup_args=("--output_user_root=$output_user_root")
 action_args=()
-if [[ "${XMOJO_PUBLIC_CACHE:-0}" == "1" ]]; then
+if [[ -n "${BBUDDY_API_KEY:-}" ]]; then
+  action_args+=(
+    "--bes_backend=grpcs://remote.buildbuddy.io"
+    "--bes_results_url=https://app.buildbuddy.io/invocation/"
+    "--remote_cache=grpcs://remote.buildbuddy.io"
+    "--remote_header=x-buildbuddy-api-key=$BBUDDY_API_KEY"
+    "--remote_instance_name=xmojo"
+    "--remote_upload_local_results=true"
+  )
+elif [[ "${XMOJO_PUBLIC_CACHE:-0}" == "1" ]]; then
   action_args+=(
     "--config=public-cache"
     "--remote_header=x-buildbuddy-api-key=gJPttl2LQEONgD2aKziQ"

@@ -295,10 +295,12 @@ and main-branch pushes. Linux jobs use `auditwheel` to verify the declared
 manylinux ABI. A `v<version>` tag collects those wheels into one GitHub release
 and publishes them to PyPI through its `pypi` trusted-publishing environment.
 The `[tool.fastship]` configuration makes `ship-release` push that tag and then
-bump both `pyproject.toml` and `bazel/versions.bzl` together. Set
-`XMOJO_PUBLIC_CACHE=1` to use Modular's authenticated public BuildBuddy cache in
-read-only mode; CI does this while local builds normally use the shared Bazel
-disk cache.
+bump both `pyproject.toml` and `bazel/versions.bzl` together. When
+`BBUDDY_API_KEY` is set, `bazelw` reads and writes xmojo's BuildBuddy cache in
+addition to the local Bazel disk cache; CI receives that key from its encrypted
+repository secret. `XMOJO_PUBLIC_CACHE=1` falls back to Modular's authenticated
+public cache in read-only mode when the xmojo key is unavailable, as on forked
+pull requests.
 
 On macOS, the wrapper passes `xcode-select`'s developer directory explicitly to
 Bazel's target and exec action environments. This avoids Bazel's
