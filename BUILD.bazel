@@ -188,7 +188,7 @@ filegroup(
 
 copy_file(
     name = "wheel_xmojo_binary",
-    src = ":xmojo",
+    src = ":xmojo.stripped",
     out = "python/xmojo/bin/xmojo",
     allow_symlink = True,
     is_executable = True,
