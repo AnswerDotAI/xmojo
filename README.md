@@ -33,70 +33,6 @@ xmojo kernel -f connection.json            # run as a Jupyter kernel
 xmojo --version
 ```
 
-### REPL
-
-Run `xmojo` without arguments. A blank line submits each cell:
-
-```console
-$ xmojo
-Mojo ORC REPL
-Expressions are delimited by a blank line. :quit exits.
-
-1> def answer() -> Int:
-..   return 42
-..
-2> print(answer())
-..
-42
-```
-
-Declarations and variables persist between cells:
-
-```mojo
-var total = 40
-```
-
-```mojo
-total += 2
-total
-```
-
-The final expression produces `Int(42)` in Jupyter. Persistent variables keep
-their original type and cannot be redeclared. They must own their data or refer
-only to static storage; copy borrowed views into an owned value before
-persisting them.
-
-### Build executables
-
-`xmojo build` uses Modular's native Mojo build driver with an ordinary stdlib,
-so compiled programs retain normal standalone I/O behavior:
-
-`hello.mojo`:
-
-```mojo
-def main():
-    print("Hello from Mojo")
-```
-
-```bash
-xmojo build hello.mojo -o hello
-./hello
-```
-
-```text
-Hello from Mojo
-```
-
-### Precompile packages
-
-Precompile a directory containing `__init__.mojo` and other Mojo modules:
-
-```bash
-xmojo precompile mypackage -o mypackage.mojoc
-```
-
-The result can be supplied to Mojo through its normal import paths.
-
 ## Jupyter notebooks
 
 Install xmojo in the environment used by Jupyter, start your preferred Jupyter
@@ -144,6 +80,13 @@ HTML("<b>automatic final-expression result</b>")
 The other traits are `MarkdownRepr`, `SVGRepr`, `LaTeXRepr`, and
 `MIMEBundleRepr`. A `Writable` value also receives a `text/plain`
 representation; other values receive a type-name fallback.
+
+### Limitations
+
+- Interrupting a running cell is not yet supported.
+- Rich display currently supports textual MIME data, without binary buffers, display metadata, or transient display IDs.
+- Persistent variables cannot be redeclared or implicitly captured by functions defined in other cells.
+- GPU support is opt-in and currently targets top-level noncapturing kernels.
 
 ## Modular GPU
 
@@ -210,14 +153,69 @@ JSON
 
 Select **Mojo (xmojo, Modular GPU)** in Jupyter.
 
-## Current limitations
+## REPL
 
-- Interrupting a running cell is not yet supported.
-- Rich display currently supports textual MIME data, without binary buffers,
-  display metadata, or transient display IDs.
-- Persistent variables cannot be redeclared or implicitly captured by
-  functions defined in other cells.
-- GPU support is opt-in and currently targets top-level noncapturing kernels.
+Run `xmojo` without arguments. A blank line submits each cell:
+
+```console
+$ xmojo
+Mojo ORC REPL
+Expressions are delimited by a blank line. :quit exits.
+
+1> def answer() -> Int:
+..   return 42
+..
+2> print(answer())
+..
+42
+```
+
+Declarations and variables persist between cells:
+
+```mojo
+var total = 40
+```
+
+```mojo
+total += 2
+total
+```
+
+The final expression produces `Int(42)` in Jupyter. Persistent variables keep
+their original type and cannot be redeclared. They must own their data or refer
+only to static storage; copy borrowed views into an owned value before
+persisting them.
+
+## Build executables
+
+`xmojo build` uses Modular's native Mojo build driver with an ordinary stdlib,
+so compiled programs retain normal standalone I/O behavior:
+
+`hello.mojo`:
+
+```mojo
+def main():
+    print("Hello from Mojo")
+```
+
+```bash
+xmojo build hello.mojo -o hello
+./hello
+```
+
+```text
+Hello from Mojo
+```
+
+### Precompile packages
+
+Precompile a directory containing `__init__.mojo` and other Mojo modules:
+
+```bash
+xmojo precompile mypackage -o mypackage.mojoc
+```
+
+The result can be supplied to Mojo through its normal import paths.
 
 See [DEV.md](DEV.md) for architecture, source builds, dependency revisions,
 testing, and contributor workflow.
