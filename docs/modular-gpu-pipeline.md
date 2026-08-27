@@ -3,8 +3,8 @@
 This document traces the accelerator path visible in the open Modular source
 and uses it to place xmojo's compiler and runtime work on the same
 architectural seams. It is based on Modular commit
-`33cd4694b19649bec7f5acac88b0430371805dc6`. The IREE runtime investigation is
-against IREE commit `7778c15918526ecbb4b9606e2cfaa8c177854cd5`.
+`a79fbdf59f224d7a2242f2d1c29cf55d93489a91`. The IREE runtime investigation is
+against IREE commit `75bfdae5be7aa36e413378a78c14cfa8595f934c`.
 
 The open repository does not contain the concrete NVIDIA, AMD, or Metal target
 implementations or the accelerator part of AsyncRT. Conclusions about those
@@ -405,7 +405,7 @@ drivers and does not provide the production Metal route required here.
 
 ### Local runtime-only build result
 
-At IREE commit `7778c15918526ecbb4b9606e2cfaa8c177854cd5`, a shallow clone plus
+At IREE commit `75bfdae5be7aa36e413378a78c14cfa8595f934c`, a shallow clone plus
 only the `third_party/flatcc` submodule is sufficient to configure and build
 the Metal HAL library. The tested configuration disables the compiler, tests,
 benchmarks, samples, Python bindings, all default drivers, local executable
@@ -434,13 +434,11 @@ this is not a constraint and we should not patch IREE for older systems.
 
 The runtime can create the Metal driver and default device without a registry,
 or use driver registration when implementing backend discovery. Device
-creation currently requires an IREE async proactor pool. Before submitting
-work, even one device must be assigned to a single-device
-`iree_hal_device_group_t` backed by an `iree_async_frontier_tracker_t`. Group
-creation assigns the device's topology and completion axis. Dispatch without
-this step currently dereferences a null frontier tracker rather than returning
-an error, so the adapter must make an incompletely initialized device
-unrepresentable.
+creation requires an IREE async proactor pool. Since IREE
+#24840,
+standalone Metal devices can queue work without an assigned device group; the
+Metal driver treats the frontier tracker as optional. xmojo therefore uses the
+device directly and does not create topology solely to make dispatch safe.
 
 Once initialized, the device directly supplies:
 

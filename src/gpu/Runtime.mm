@@ -3,13 +3,11 @@
 
 #include "xmojo/gpu/Runtime.h"
 
-#include "iree/async/frontier_tracker.h"
 #include "iree/async/util/proactor_pool.h"
 #include "iree/base/internal/flatcc/building.h"
 #include "iree/base/internal/flatcc/parsing.h"
 #include "iree/base/status_cc.h"
 #include "iree/hal/api.h"
-#include "iree/hal/device_group.h"
 #include "iree/hal/drivers/metal/api.h"
 #include "iree/schemas/metal_executable_def_builder.h"
 
@@ -50,11 +48,7 @@ template <typename T, auto release>
 using Ref = std::unique_ptr<T, Releaser<T, release>>;
 
 using DriverRef = Ref<iree_hal_driver_t, iree_hal_driver_release>;
-using FrontierTrackerRef =
-    Ref<iree_async_frontier_tracker_t, iree_async_frontier_tracker_release>;
 using DeviceRef = Ref<iree_hal_device_t, iree_hal_device_release>;
-using DeviceGroupRef =
-    Ref<iree_hal_device_group_t, iree_hal_device_group_release>;
 using BufferRef = Ref<iree_hal_buffer_t, iree_hal_buffer_release>;
 using ExecutableRef = Ref<iree_hal_executable_t, iree_hal_executable_release>;
 using ExecutableCacheRef =
@@ -252,9 +246,7 @@ struct Device::Impl {
   DeviceInfo info;
   ProactorPoolRef proactorPool;
   DriverRef driver;
-  FrontierTrackerRef frontierTracker;
   DeviceRef device;
-  DeviceGroupRef deviceGroup;
   ExecutableCacheRef executableCache;
   SemaphoreRef timeline;
   uint64_t nextTimelineValue = 0;
@@ -310,20 +302,6 @@ Device Device::open(std::string_view selector) {
             driver.get(), ordinal, 0, nullptr, &createParams,
             iree_allocator_system(), out);
       });
-  auto frontierTracker =
-      createRef<iree_async_frontier_tracker_t,
-                iree_async_frontier_tracker_release>([&](auto **out) {
-        return iree_async_frontier_tracker_create(
-            iree_async_frontier_tracker_options_default(),
-            iree_allocator_system(), out);
-      });
-  auto deviceGroup =
-      createRef<iree_hal_device_group_t, iree_hal_device_group_release>(
-          [&](auto **out) {
-            return iree_hal_device_group_create_from_device(
-                device.get(), frontierTracker.get(), iree_allocator_system(),
-                out);
-          });
   auto executableCache =
       createRef<iree_hal_executable_cache_t, iree_hal_executable_cache_release>(
           [&](auto **out) {
@@ -341,9 +319,7 @@ Device Device::open(std::string_view selector) {
   impl->info = std::move(devices[ordinal]);
   impl->proactorPool = std::move(proactorPool);
   impl->driver = std::move(driver);
-  impl->frontierTracker = std::move(frontierTracker);
   impl->device = std::move(device);
-  impl->deviceGroup = std::move(deviceGroup);
   impl->executableCache = std::move(executableCache);
   impl->timeline = std::move(timeline);
   return Device(std::move(impl));

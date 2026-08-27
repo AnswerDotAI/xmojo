@@ -270,10 +270,10 @@ large; published wheels use `-c opt`.
 The current source/package mapping is deliberately one-to-one:
 
 ```text
-Modular source  33cd4694b19649bec7f5acac88b0430371805dc6
-Mojo package    1.1.0.dev2026082005
-MAX package     26.6.0.dev2026082005
-Mojo compiler   Mojo 1.1.0.dev2026082005 (c72288dd)
+Modular source  a79fbdf59f224d7a2242f2d1c29cf55d93489a91
+Mojo package    1.1.0.dev2026082605
+MAX package     26.6.0.dev2026082605
+Mojo compiler   Mojo 1.1.0.dev2026082605 (dd957314)
 ```
 
 `bazel/versions.bzl` is authoritative for this mapping and the recorded sibling
@@ -459,7 +459,8 @@ named configurations such as `--config=asan` may be selected explicitly.
 The current compiler and kernel PoC is tested against:
 
 ```text
-modular  33cd4694b19649bec7f5acac88b0430371805dc6
+modular  a79fbdf59f224d7a2242f2d1c29cf55d93489a91
+iree     75bfdae5be7aa36e413378a78c14cfa8595f934c
 nlohmann-json 55f93686c01528224f448c19128836e7df245f72
 xeus     69d6d1397c68ba0ac1f6ab766dbeebb8a81e5b03
 xeus-zmq 660e6c6ca75badbe55b295cec8c8dd020a5540f0
@@ -474,5 +475,5 @@ both old and new APIs, then run:
 ./bazelw test @xmojo//:session_test @xmojo//:interpreter_test @xmojo//:cli_test @xmojo//:kernel_test @xmojo//:spirv_target_test
 ./bazelw build @xmojo//:xmojo
 uv build --wheel
-python tests/wheel_test.py dist/xmojo-*.whl tests/cli_test.py tests/kernel_test.py 0.0.2026082005.post1
+python tests/wheel_test.py dist/xmojo-*.whl tests/cli_test.py tests/kernel_test.py 0.0.2026082605.post1
 ```
