@@ -4,4 +4,4 @@ channels = ["conda-forge", "https://conda.modular.com/max-nightly/"]
 platforms = ["linux-64", "linux-aarch64", "osx-arm64"]
 
 [dependencies]
-max-core = "==26.6.0.dev2026082005"
+max-core = "==26.6.0.dev2026082605"

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "xmojo"
-version = "0.0.2026082005.post4"
+version = "0.0.2026082605.post1"
 description = "Interactive Mojo environment using Modular's ORC execution engine"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -12,7 +12,7 @@ license = "Apache-2.0 WITH LLVM-exception"
 license-files = ["LICENSE"]
 
 [project.optional-dependencies]
-modular-gpu = ["max-core==26.6.0.dev2026082005"]
+modular-gpu = ["max-core==26.6.0.dev2026082605"]
 
 [project.scripts]
 xmojo = "xmojo._cli:xmojo"
