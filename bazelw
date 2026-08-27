@@ -2,6 +2,14 @@
 
 set -euo pipefail
 
+if [[ -n "${CODEX_SANDBOX:-}" ]]; then
+  cat >&2 <<'EOF'
+error: xmojo's Bazel wrapper must not run in a Codex sandbox.
+Invoke ./bazelw directly under its Codex allow rule, outside the sandbox.
+EOF
+  exit 2
+fi
+
 script_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 deps_root="${XMOJO_DEPS_ROOT:-$(dirname "$script_root")}"
 modular_root="${XMOJO_MODULAR_ROOT:-$deps_root/modular}"
@@ -38,9 +46,12 @@ elif [[ "${XMOJO_PUBLIC_CACHE:-0}" == "1" ]]; then
 fi
 if [[ "$(uname -s)" == "Darwin" ]]; then
   developer_dir="$(xcode-select -p)"
+  xcode_build_number="$(/usr/bin/xcodebuild -version | awk '/Build version/ {print $3}')"
   action_args+=(
     "--action_env=DEVELOPER_DIR=$developer_dir"
     "--host_action_env=DEVELOPER_DIR=$developer_dir"
+    "--repo_env=DEVELOPER_DIR=$developer_dir"
+    "--repo_env=XCODE_VERSION=$xcode_build_number"
   )
 fi
 

@@ -129,6 +129,13 @@ The main development stories are:
 tests/iree_hal/test
 ```
 
+Codex must run `./bazelw` outside its sandbox; the wrapper fails immediately
+when `CODEX_SANDBOX` is set. Configure
+`prefix_rule(pattern=["./bazelw"], decision="allow")`, then use
+`sandbox_permissions="require_escalated"`. Invoke the wrapper directly rather
+than through `bash`. This is gate-free and prevents a sandboxed Bazel server
+from being reused by later commands.
+
 The first command builds the source compiler, stdlib overlay, frontends, and
 compiler-only typed SPIR-V story. Its Python tests use the `python` on `PATH`
 and require `conkernelclient`. In the AnswerAI development workspace, activate
@@ -302,12 +309,13 @@ repository secret. `XMOJO_PUBLIC_CACHE=1` falls back to Modular's authenticated
 public cache in read-only mode when the xmojo key is unavailable, as on forked
 pull requests.
 
-On macOS, the wrapper passes `xcode-select`'s developer directory explicitly to
-Bazel's target and exec action environments. This avoids Bazel's
-LaunchServices-based `xcode-locator`, which can reject an otherwise working
-Xcode installation on macOS 26, without modifying Bazel or the selected Xcode.
-Keeping this setting in every wrapper invocation also preserves consistent
-action keys between development and release builds.
+On macOS, the wrapper passes `xcode-select`'s developer directory to Bazel's
+target and exec action environments. It also passes the developer directory and
+Xcode build number as repository inputs, so Bazel refreshes its generated Xcode
+configuration when either changes and equivalent machines share configuration
+and remote-cache keys. Bazel's repository rule discovers installed Xcodes
+through LaunchServices, which Codex's macOS Seatbelt sandbox does not expose;
+this is why sandboxed Codex invocations are rejected rather than worked around.
 
 ## Official GPU compilation
 
