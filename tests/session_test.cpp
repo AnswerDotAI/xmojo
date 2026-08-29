@@ -302,6 +302,28 @@ except error:
 
   output.standardOutput.clear();
   ASSERT_TRUE(executionSucceeds(*session, R"(
+def versioned() -> Int:
+  return 1
+
+def calls_versioned() -> Int:
+  return versioned()
+
+def overloaded(value: Int) -> Int:
+  return value
+)"));
+  ASSERT_TRUE(executionSucceeds(*session, R"(
+def versioned() -> Int:
+  return 2
+
+def overloaded(value: String) -> Int:
+  return value.byte_length()
+
+print(versioned(), calls_versioned(), overloaded(4), overloaded("five"))
+)"));
+  EXPECT_EQ(output.standardOutput, "2 1 4 4\n");
+
+  output.standardOutput.clear();
+  ASSERT_TRUE(executionSucceeds(*session, R"(
 struct Tracked(Movable):
   var label: String
 
