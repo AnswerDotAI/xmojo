@@ -3,8 +3,7 @@
 ## Architecture
 
 All xmojo-authored code lives in this repository. The sibling Modular checkout
-is a revision-pinned source dependency. Its compiler sources remain unmodified;
-the root module has one local configuration line enabling LLVM's SPIR-V target:
+is an unmodified, revision-pinned source dependency.
 
 ```text
 InteractiveSession
@@ -20,15 +19,11 @@ InteractiveSession
 └── unified xmojo REPL, compiler-driver, and xeus-zmq kernel frontend
 ```
 
-The experimental native accelerator runtime is a separate `libxmojo_gpu`
-static library with an IREE-free C++ interface in `include/xmojo/gpu`. Its
-Metal implementation links only IREE base, async, common HAL, FlatCC, and the
-Metal driver from a sibling IREE checkout. It does not link the IREE compiler,
-VM, LLVM, or MLIR and is not yet connected to the installed Mojo API.
-
-The public boundary is direct C++. There is no subprocess protocol or public C
-ABI. Generated code will still use ordinary CompilerRT ABI entry points when
-runtime host services are added.
+GPU compilation and execution use Modular's native compiler targets and MAX
+runtime. xmojo owns the interactive session and frontend integration; Modular
+owns device discovery, specialization, code generation, allocation, and launch.
+The public session boundary is direct C++. Generated code uses the native
+CompilerRT and MAX runtime entry points.
 
 Modular remains Bazel's main repository because its dependency overrides are
 root-module configuration. The local `bazelw` injects this worktree as the
@@ -39,146 +34,60 @@ is intentional. The dependency list remains explicit in `BUILD.bazel`.
 
 ## Development layout
 
-Development uses editable sibling worktrees rather than vendored or patched
-dependencies:
+Development uses editable sibling worktrees for Modular, nlohmann-json, xeus,
+xeus-zmq, libzmq, and cppzmq. `XMOJO_DEPS_ROOT` selects their parent directory
+and defaults to xmojo's parent. `XMOJO_MODULAR_ROOT` can select a separate Modular
+checkout. No dependency needs an xmojo patch.
 
-```text
-git/
-├── modular/
-├── iree/
-├── xmojo/
-├── nlohmann-json/
-├── xeus/
-├── xeus-zmq/
-├── libzmq/
-└── cppzmq/
-```
+Install `uv`, CMake, and Ninja. macOS development needs Xcode and GPU execution
+needs its Metal toolchain. Ubuntu/Debian development needs `cmake`, `ninja-build`,
+and `pkg-config`. Native builds target Apple Silicon macOS and Linux on ARM64
+or x86-64; GPU execution additionally requires hardware supported by Modular.
 
-`XMOJO_DEPS_ROOT` selects the directory containing these worktrees and defaults
-to xmojo's parent directory. `XMOJO_MODULAR_ROOT` can select a Modular checkout
-outside that directory. Wheel dependency revisions are recorded in
-`bazel/versions.bzl`. The IREE revision used by the experimental runtime is
-recorded in `docs/modular-gpu-pipeline.md` until that library becomes a packaged
-xmojo dependency.
-
-### New checkout
-
-Install `uv`, CMake, and Ninja. macOS development also needs Xcode. On
-Ubuntu/Debian Linux, the native prerequisites are:
+Create missing pinned dependencies and set up the editable project with:
 
 ```bash
-sudo apt-get install cmake ninja-build pkg-config
-```
-
-Source development and published wheels support Apple Silicon macOS and Linux
-on ARM64 or x86-64. The experimental IREE runtime story is currently
-Metal-only; the interactive engine and compiler-only SPIR-V story build and run
-on both operating systems.
-
-Clone xmojo, then let its setup helper create the pinned sibling worktrees and
-enable LLVM's SPIR-V target in Modular:
-
-```bash
-git clone --depth 1 https://github.com/AnswerDotAI/xmojo.git
-cd xmojo
 tools/setup_source_deps.sh
-```
-
-The helper clones only missing dependencies and leaves existing worktrees
-untouched, so normal development can continue to use current local revisions.
-The experimental IREE runtime additionally needs the revision recorded in
-`docs/modular-gpu-pipeline.md` and its FlatCC submodule:
-
-```bash
-git clone --depth 1 https://github.com/iree-org/iree.git ../iree
-git -C ../iree submodule update --init --depth 1 third_party/flatcc
-```
-
-The open Modular build enables only its default LLVM targets. xmojo's SPIR-V
-backend needs one local root-module configuration line. Add it between the
-existing `use_extension` and `use_repo` calls in `modular/MODULE.bazel`:
-
-```starlark
-llvm_configure = use_extension("//bazel/public-patches:llvm_project.bzl", "llvm_configure")
-llvm_configure.configure(extra_targets = ["SPIRV"])
-use_repo(llvm_configure, "llvm-project")
-```
-
-This is the only local Modular edit, and `tools/setup_source_deps.sh` applies it
-idempotently. It selects code already present in Modular's pinned LLVM checkout;
-xmojo contains the target implementation. Keeping it in the root module means
-every xmojo build uses the same LLVM configuration and Bazel cache key.
-
-Set up the editable Python project and its native command with:
-
-```bash
 uv sync
 uv run xmojo --version
 ```
 
-The setuptools editable build asks Bazel for a development build of the native
-assets and stages them under the ignored `python/xmojo/_native` directory.
-Python edits remain immediately visible; rerun `uv sync` after native, Mojo, or
-build-configuration changes.
+The setup helper leaves existing worktrees untouched. The editable build stages
+native assets under the ignored `python/xmojo/_native` directory. Python edits
+remain visible; rerun `uv sync` after native, Mojo, or build configuration changes.
 
-The main development stories are:
+Run the core stories and, on a GPU host, the hardware stories:
 
 ```bash
 ./bazelw test @xmojo//:session_test @xmojo//:interpreter_test \
-  @xmojo//:cli_test @xmojo//:kernel_test @xmojo//:spirv_target_test
-tests/iree_hal/test
+  @xmojo//:cli_test @xmojo//:kernel_test --test_output=errors
+./bazelw test @xmojo//:gpu_test @xmojo//:gpu_cli_test \
+  @xmojo//:gpu_kernel_test --test_output=errors
 ```
+
+Python frontend tests use `python` on `PATH` and need `conkernelclient`. The GPU
+targets are tagged `manual` and `requires-gpu`; run them explicitly rather than
+counting their exclusion from a wildcard run as GPU verification.
 
 Codex must run `./bazelw` outside its sandbox; the wrapper fails immediately
 when `CODEX_SANDBOX` is set. Configure
 `prefix_rule(pattern=["./bazelw"], decision="allow")`, then use
 `sandbox_permissions="require_escalated"`. Invoke the wrapper directly rather
-than through `bash`. This is gate-free and prevents a sandboxed Bazel server
-from being reused by later commands.
+than through `bash`. This prevents a sandboxed Bazel server from being reused
+by later commands.
 
-The first command builds the source compiler, stdlib overlay, frontends, and
-compiler-only typed SPIR-V story. Its Python tests use the `python` on `PATH`
-and require `conkernelclient`. In the AnswerAI development workspace, activate
-the workspace environment before running them:
-
-```bash
-source ~/aai-ws/.venv/bin/activate
-```
-
-The second command independently builds the runtime-only IREE Metal story and
-is only run on macOS.
-
-CMake automatically materializes Modular's BoringSSL headers and stages the
-xeus libraries when Bazel first needs them. On Linux it compiles those
-libraries with Modular's pinned Clang and Ubuntu 22.04 sysroot, matching the ABI
-used by the final Bazel link. An xmojo-owned UUID implementation uses the same
-BoringSSL randomness, so the host distribution's `libuuid` cannot leak across
-that boundary.
-
-The native accelerator narrative is currently built independently with CMake:
-
-```bash
-tests/iree_hal/test
-```
-
-It discovers and selects Metal devices through `auto`, `metal`, and
-`metal:<ordinal>` selectors, then verifies asynchronous dispatch, persistent
-buffer views, byte-packed push constants, executable replacement, and exact
-readback through `libxmojo_gpu`. See `docs/modular-gpu-pipeline.md` for the
-compiler/runtime boundary and the next integration checkpoints.
-
-The compiler-only accelerator narrative is `@xmojo//:spirv_target_test`. It
-registers xmojo-owned `TargetTraits`, `TargetLowering`, and `TargetBackend`
-implementations, compiles a typed Mojo function through `compile_info`, and
-checks its Vulkan storage-buffer and push-constant interface in textual and
-binary SPIR-V. The internal target value is in `xmojo.spirv`; its raw argument
-annotations are temporary compiler scaffolding rather than a public GPU API.
+CMake materializes Modular's BoringSSL headers and stages the xeus libraries
+when Bazel first needs them. On Linux it uses Modular's pinned Clang and Ubuntu
+22.04 sysroot to match the final Bazel link. On macOS it uses the SDK belonging
+to the selected Xcode. xmojo's UUID implementation uses BoringSSL randomness,
+so the host distribution's `libuuid` cannot leak across that boundary.
 
 ## Interactive compiler PoC
 
-`InteractiveParser` does not call `parseREPLExpression` and does not create an
-LLDB-style REPL context. It borrows three language-independent ideas from
-Modular's `ParserDriverREPL.cpp`, with attribution in the source:
+Cell compilation uses xmojo's own module construction and persistent-value ABI.
+Completion and inspection use Modular's `MojoREPLContext` as a tooling helper;
+it does not execute cells or materialize their variables. The parser borrows
+three language-independent ideas from Modular's REPL, with source attribution:
 
 - partition cell source into module declarations and executable statements;
 - map generated-wrapper diagnostics back to the submitted cell; and
@@ -250,64 +159,32 @@ xmojo publishes platform wheels only; it does not publish a source
 distribution. The wheel tags are `macosx_12_0_arm64`,
 `manylinux_2_35_aarch64`, and `manylinux_2_35_x86_64`.
 
-Each platform wheel packages the native frontend, the three runtime libraries it
-needs, ordinary and interactive-overlay `std` packages, and base and
-Modular-GPU variants of the small `xmojo` package. The base variant contains
-the notebook display API but
-deliberately excludes the MAX-dependent GPU module. Tiny Python console entry
-points locate these resources relative to `site-packages`, set the explicit
-CompilerRT and import paths, then replace themselves with the native process.
-REPL and kernel sessions use the overlay so output reaches their host callbacks;
-`build` and `precompile` switch to the ordinary stdlib so generated artifacts
-retain normal standalone I/O behavior.
-Bazel's much larger compiler-tool runfiles closure is not needed because
-compilation and ORC linking happen in-process. Apart from platform system
-libraries and frameworks, the installed commands therefore have no runtime
-dependency on Bazel outputs, a source checkout, or an installed Mojo SDK.
+Each platform wheel packages the native frontend, its shared-library dependency
+graph, ordinary and interactive-overlay `std` packages, `max.mojoc`, and
+`xmojo.mojoc`. The wheel also includes Modular's license and
+third-party notices. Python entry points locate these resources relative to
+`site-packages`, set the explicit CompilerRT and import paths, then replace
+themselves with the native process. REPL and kernel sessions use the overlay;
+`build` and `precompile` select the ordinary stdlib for standalone I/O behavior.
 
-The base wheel has no Mojo or MAX package dependency. Its optional `modular-gpu`
-extra depends on the matching `max-core` nightly. When explicitly requested,
-the launcher locates `max-core` through
-Python package metadata, asks its `gpu-query` for the target accelerator, adds
-its Mojo package directory, and passes the absolute AsyncRT Mojo bindings,
-official compiler, and Modular-root paths into the native frontend. Local
-development builds retain Bazel's debug configuration and are intentionally
-large; published wheels use `-c opt`.
+The wheel has no separate Mojo or MAX Python package dependency. Hardware
+runtime requirements, such as the Metal toolchain or GPU drivers, still apply.
+Development assets retain Bazel's default configuration; published wheels use
+`-c opt`.
 
-The current source/package mapping is deliberately one-to-one:
+`bazel/versions.bzl` is authoritative for the source revisions. Updating Modular
+requires rebuilding all compiler, runtime, stdlib, and MAX artifacts together.
+`tools/build_wheel.sh` rejects wrong revisions or dirty dependency worktrees.
+`XMOJO_ALLOW_DIRTY=1` skips only the xmojo cleanliness check for local packaging
+development and must not be used for a published build.
 
-```text
-Modular source  a79fbdf59f224d7a2242f2d1c29cf55d93489a91
-Mojo package    1.1.0.dev2026082605
-MAX package     26.6.0.dev2026082605
-Mojo compiler   Mojo 1.1.0.dev2026082605 (dd957314)
-```
+GitHub Actions builds all three platform wheels. Linux jobs use `auditwheel`
+to verify the declared manylinux ABI. Release tags publish through the existing
+trusted-publishing workflow; do not bump the package version during development.
 
-`bazel/versions.bzl` is authoritative for this mapping and the recorded sibling
-dependency revisions. Updating Modular means updating it, the Pixi lock, the
-official compiler assertion, and the optional MAX requirement together. The
-wheel carries its source-built CompilerRT and compiled stdlib overlay as part of
-xmojo's exact native ABI and output-hook implementation.
-
-`tools/build_wheel.sh` rejects the wrong revision or a dirty worktree for every
-source dependency, while allowing and checking Modular's single documented
-SPIR-V configuration line. It checks the duplicated Python and Pixi pins and
-invokes `uv build --wheel`. It defaults to `bazelw`; set
-`XMOJO_BAZEL_WRAPPER=./bazelw2` when that is the server allocated to the current
-session. `XMOJO_ALLOW_DIRTY=1` skips only the xmojo cleanliness check for local
-packaging development; it must not be used for a published build.
-
-GitHub Actions builds and retains all three platform wheels for pull requests
-and main-branch pushes. Linux jobs use `auditwheel` to verify the declared
-manylinux ABI. A `v<version>` tag collects those wheels into one GitHub release
-and publishes them to PyPI through its `pypi` trusted-publishing environment.
-The `[tool.fastship]` configuration makes `ship-release` push that tag and then
-bump both `pyproject.toml` and `bazel/versions.bzl` together. When
-`BBUDDY_API_KEY` is set, `bazelw` reads and writes xmojo's BuildBuddy cache in
-addition to the local Bazel disk cache; CI receives that key from its encrypted
-repository secret. `XMOJO_PUBLIC_CACHE=1` falls back to Modular's authenticated
-public cache in read-only mode when the xmojo key is unavailable, as on forked
-pull requests.
+When `BBUDDY_API_KEY` is set, `bazelw` selects xmojo's BuildBuddy configuration.
+Otherwise it uses Modular's read-only public action cache with build-event
+uploads and remote cache writes disabled.
 
 On macOS, the wrapper passes `xcode-select`'s developer directory to Bazel's
 target and exec action environments. It also passes the developer directory and
@@ -317,92 +194,30 @@ and remote-cache keys. Bazel's repository rule discovers installed Xcodes
 through LaunchServices, which Codex's macOS Seatbelt sandbox does not expose;
 this is why sandboxed Codex invocations are rejected rather than worked around.
 
-## Official GPU compilation
+## Native GPU compilation
 
-The source-built compiler handles each cell's MAX host code and ORC linking,
-but it cannot emit Apple's closed `air64` backend. `xmojo.gpu.compile[func]`
-therefore calls back into `InteractiveSession`, which invokes the exactly
-matched official Mojo compiler on the session's accumulated declaration
-source. A generated temporary shared library uses `std.compile.compile_info`
-to expose the device object and linkage name; xmojo copies those bytes and
-unloads the temporary library.
+`InteractiveSession` uses Modular's normal offload pipeline and MAX runtime.
+Ordinary `max.gpu.host.DeviceContext` calls compile and launch kernels in-process;
+there is no second compiler, declaration-source replay, custom GPU ABI, or
+xmojo-specific accelerator backend. The default target accelerator comes from
+Modular's device discovery, with an optional explicit session/CLI override.
 
-The Mojo API loads that object through the cell's real `DeviceContext` and
-returns `CompiledKernel[func, ...]`. It retains the original function value for
-source-name reflection and separately infers its declared argument types. Each
-`enqueue` checks the number and device conversion of its arguments at compile
-time, then reuses MAX's Metal encoder or the generic device encoder. The first
-version supports top-level, nonparameterized, noncapturing functions with an
-ordinary identifier.
+The standard library overlay replaces `_plugin/_impl.mojo` and selects
+`XMojoPlugin` only for host compilation. Accelerator compilation keeps the
+native target's plugin. Shared compiler and runtime dependencies retain
+Modular's registry ownership, and ORC resolves runtime symbols through the
+process symbol generator.
 
-Official device artifacts are cached by the exact generated source,
-accelerator target, official compiler contents, and the contents and resolution
-order of every Mojo package on the compiler import paths. Cache entries contain
-only the object bytes and linkage name; each `DeviceContext` still loads its own
-device handle. A miss runs one synchronous `mojo build`, then publishes the
-entry with an atomic rename. Failures and builds whose package fingerprint
-changes during compilation are not cached. Corrupt entries are misses. The
-default platform cache can be overridden with `XMOJO_GPU_CACHE_DIR` or the
-native `--gpu-cache-directory` option.
+GPU contexts and buffers follow the existing persistent-value rules, including
+reverse destruction before the ORC engine is destroyed. Compilation failures
+execute nothing. Device work remains asynchronous until the program explicitly
+synchronizes it.
 
-A Modular GPU process must load its MAX runtime globally before
-`Init::getOrCreateContext`. The native session canonicalizes the configured
-runtime path under a mutex, permanently retains the first successful load,
-reuses that runtime for later sessions, and rejects attempts to mix a different
-MAX runtime into the process. The native `xmojo` frontend accepts
-`--target-accelerator`, `--gpu-runtime-library`, `--mojo-compiler`, and
-`--modular-home`; installed launchers resolve these from the pinned optional
-dependency rather than asking notebook users for paths.
-
-On macOS with Pixi and Xcode's Metal toolchain installed
-(`xcodebuild -downloadComponent MetalToolchain`):
-
-```bash
-./bazelw2 test @xmojo//:gpu_shared_library_test
-```
-
-This compiles a kernel submitted as cell source, rejects an incorrectly typed
-launch during host compilation, performs repeated Metal dispatch and readback,
-and checks reuse and conflict handling for the process-wide MAX runtime.
-
-CPU `print()` calls use the stdlib's `print_emit_fn` hook. Generated code calls
-an explicitly registered ORC symbol, which routes stdout and stderr to the
-callback active for that synchronous session execution. Calls without a
-callback and calls targeting other file descriptors fall back to POSIX
-`write`. Each interactive module sets `HEAP_BUFFER_BYTES=131072`, making the
-buffer stack storage per active print call rather than permanent process
-storage. Direct `FileDescriptor.write_*` calls and GPU output remain outside
-the current boundary.
-
-The generated cell wrapper catches an uncaught Mojo `Error` and synchronously
-returns its message and optional Mojo stack trace through a registered ORC
-symbol. Runtime errors are distinct from compiler diagnostics and leave the
-session usable. Native crashes and JIT failures after an archive is added make
-the session unusable instead of claiming recovery from potentially inconsistent
-state.
-
-The public Mojo package provides `display`, `HTMLRepr`, `MarkdownRepr`,
-`SVGRepr`, `LaTeXRepr`, and `MIMEBundleRepr`. Traits make rich representation
-explicit and compiler-checked: Mojo currently has no structural “has this
-method” reflection. Rendering produces one synchronous `DisplayEvent` through
-registered ORC symbols. `display()` becomes Jupyter `display_data`, while the
-compiler-inserted helper becomes `execute_result`. Bundles currently contain
-textual MIME data only; metadata, transient display IDs, and binary buffers are
-not modeled.
-
-Completion and inspection use a second `MojoParserContext` containing replayed
-committed cells. This keeps speculative editor requests out of executable ORC
-state. Completion calls `codeCompleteREPLExpression`; inspection first collects
-the compiler's resolved references and renders `PublicDecl` Markdown. Persistent
-variables are synthetic wrapper parameters rather than renderable declarations,
-so their fallback remains compiler-driven: roots use their resolved
-`MojoASTTypeRef`, and members use an exact documented REPL-completion result.
-Persistent root completions expose the same compiler-rendered declaration as
-their Jupyter completion signature.
-Completeness uses Mojo's lexer for delimiters and lexical errors, then recognizes
-trailing suite colons and operators to supply notebook indentation. The session
-API uses UTF-8 byte offsets, as Modular's compiler does; `MojoInterpreter`
-translates these to and from Jupyter's Unicode-character offsets.
+The GPU test targets are `gpu_test`, `gpu_cli_test`, and `gpu_kernel_test`.
+They cover direct `InteractiveSession` execution, the real REPL, and Jupyter
+messages, including parameterized kernels and device allocations spanning cells.
+They are manual hardware tests and must run on a supported GPU host.
+See [the integration notes](docs/modular-gpu-pipeline.md) for details.
 
 ## Jupyter frontend
 
@@ -427,8 +242,7 @@ Jupyter defaults: `none` and `hmac-sha256`. Other schemes fail explicitly.
 
 ## Design constraints
 
-- Keep Modular's compiler sources free of xmojo patches; the root module may
-  select LLVM's SPIR-V target as documented above.
+- Keep the entire Modular checkout unmodified; use its native GPU targets.
 - Track Modular private APIs directly; update xmojo rather than adding version
   compatibility code.
 - Use ORC exclusively; do not route execution through LLDB or MCJIT.
@@ -456,32 +270,20 @@ outputs.
 two defaults.
 
 The wrappers reject caller overrides of their action environments, injected
-repositories, toolchain, visibility policy, output-user root, and implicit
-`build-mojo` config. These infrastructure settings must remain identical across
+repositories, toolchain, visibility policy, and output-user root.
+These infrastructure settings must remain identical across
 sessions for reliable disk-cache reuse. Ordinary Bazel configurations remain
 available: fastbuild/debug and `-c opt` use independent cached outputs, while
 named configurations such as `--config=asan` may be selected explicitly.
 
-## Tested dependency revisions
+## Dependency revisions
 
-The current compiler and kernel PoC is tested against:
+`bazel/versions.bzl` records the exact source revisions. Modular is pinned to
+`bbc13a719b6c139ede763f1434a4342ebfd843ac`, corresponding to Mojo
+`1.3.0.dev2026111705` and MAX `26.8.0.dev2026111705`. All compiler, stdlib,
+MAX package, and runtime artifacts are built together from that checkout.
 
-```text
-modular  a79fbdf59f224d7a2242f2d1c29cf55d93489a91
-iree     75bfdae5be7aa36e413378a78c14cfa8595f934c
-nlohmann-json 55f93686c01528224f448c19128836e7df245f72
-xeus     69d6d1397c68ba0ac1f6ab766dbeebb8a81e5b03
-xeus-zmq 660e6c6ca75badbe55b295cec8c8dd020a5540f0
-libzmq   46493370217ac135246617fa2f6ac819d8b61bfc
-cppzmq   7f0530688804c2b5b6b0d985773405593fd25ca8
-```
-
-When updating Modular, replace the recorded revision rather than supporting
-both old and new APIs, then run:
-
-```bash
-./bazelw test @xmojo//:session_test @xmojo//:interpreter_test @xmojo//:cli_test @xmojo//:kernel_test @xmojo//:spirv_target_test
-./bazelw build @xmojo//:xmojo
-uv build --wheel
-python tests/wheel_test.py dist/xmojo-*.whl tests/cli_test.py tests/kernel_test.py 0.0.2026082605.post1
-```
+When updating Modular, replace the recorded revision and adopt the new APIs
+directly. Run the ordinary session, interpreter, CLI, and kernel tests, then run
+all three GPU targets on each supported hardware backend. Build and test a wheel
+in an isolated Python environment before releasing.

@@ -5,23 +5,22 @@
 # ===----------------------------------------------------------------------=== #
 
 from std.collections import OptionalReg
-from std.collections.string.string_span import _get_kgen_string
-from std.ffi import CStringSlice, c_int, c_size_t, external_call
-from std.io.file_descriptor import FileDescriptor
+from std.ffi import CStringSpan, c_size_t, external_call
+from std.io.file_descriptor import RawFileDescriptor
 
-from ._trait import PluginHooks
+from ._trait import PluginHooks, TargetDeviceKind
 
 
 def _emit_print[O: Origin](
-    cstr: CStringSlice[O], file_value: FileDescriptor
+    cstr: CStringSpan[O], file_value: RawFileDescriptor
 ):
     external_call["xmojo_emit_print", NoneType](
-        cstr.ptr(), c_size_t(len(cstr)), c_int(file_value.value)
+        cstr.ptr(), c_size_t(len(cstr)), file_value._raw()
     )
 
 
 struct XMojoPlugin(PluginHooks):
     """Default host plugin that routes `print()` through an xmojo session."""
 
-    comptime name: __mlir_type.`!kgen.string` = _get_kgen_string["default"]()
+    comptime device_kind = TargetDeviceKind.cpu
     comptime print_emit_fn = OptionalReg(_emit_print)

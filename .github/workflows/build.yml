@@ -41,7 +41,6 @@ jobs:
         env:
           BBUDDY_API_KEY: ${{ secrets.BBUDDY_API_KEY }}
           BB_DISABLE_SIDECAR: 1
-          XMOJO_PUBLIC_CACHE: 1
         run: tools/build_wheel.sh
       - name: Check manylinux compatibility
         if: runner.os == 'Linux'

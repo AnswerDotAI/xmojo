@@ -7,7 +7,7 @@
 #ifndef XMOJO_INTERACTIVEPARSER_H
 #define XMOJO_INTERACTIVEPARSER_H
 
-#include "KGEN/MojoTooling/PublicASTDecl.h"
+#include "Mojo/MojoParser/ASTDecl.h"
 #include "mlir/IR/Types.h"
 #include "llvm/ADT/StringRef.h"
 
@@ -46,10 +46,9 @@ public:
   };
 
   struct Cell {
-    M::MojoASTDeclRef moduleDecl;
-    M::MojoASTDeclRef entryPointDecl;
+    M::KGEN::LIT::ASTDecl *moduleDecl;
+    M::KGEN::LIT::ASTDecl *entryPointDecl;
     std::string source;
-    std::string declarationSource;
     std::string moduleName;
     std::vector<PersistentVar> newVars;
   };

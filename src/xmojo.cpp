@@ -10,9 +10,9 @@
 #include "CLI.h"
 #include "SessionOptionsCLI.h"
 
-#include "KGEN/Support/CLOptionUtils.h"
-#include "KGEN/Support/ForceLinkMLIRC.h"
-#include "KGEN/ToolCommon/OOMHandler.h"
+#include "Mojo/Support/CLOptionUtils.h"
+#include "Mojo/Support/ForceLinkMLIRC.h"
+#include "Mojo/ToolCommon/OOMHandler.h"
 #include "Support/Driver/DriverSupport.h"
 
 #include "llvm/ADT/ArrayRef.h"
@@ -33,8 +33,7 @@ void printUsage() {
 
 int runCompilerCommand(const std::string &command, int argc, char **argv) {
   const char *stdlibFile = std::getenv("XMOJO_COMPILER_STDLIB_PATH");
-  const char *compilerRTFile =
-      std::getenv("MODULAR_MOJO_MAX_COMPILERRT_PATH");
+  const char *compilerRTFile = std::getenv("MODULAR_MOJO_MAX_COMPILERRT_PATH");
   if (!stdlibFile) {
     std::cerr << "xmojo: XMOJO_COMPILER_STDLIB_PATH is not configured\n";
     return 1;
@@ -58,15 +57,22 @@ int runCompilerCommand(const std::string &command, int argc, char **argv) {
               << "': " << error.message() << '\n';
     return 1;
   }
-  if (setenv("MODULAR_MOJO_MAX_IMPORT_PATH",
-             stdlibPath.parent_path().c_str(), 1) != 0) {
+  std::string importPaths = stdlibPath.parent_path().string();
+  if (const char *configured = std::getenv("MODULAR_MOJO_MAX_IMPORT_PATH"))
+    importPaths += "," + std::string(configured);
+  if (setenv("MODULAR_MOJO_MAX_IMPORT_PATH", importPaths.c_str(), 1) != 0) {
     std::cerr << "xmojo: cannot configure compiler import path\n";
     return 1;
   }
-  std::string sharedLibraries =
+  std::string sharedLibraries;
+  if (const char *configured = std::getenv("MODULAR_MOJO_MAX_SHARED_LIBS")) {
+    sharedLibraries = configured;
+    if (!sharedLibraries.empty())
+      sharedLibraries += ",";
+  }
+  sharedLibraries +=
       "-Xlinker,-rpath,-Xlinker," + compilerRTPath.parent_path().string();
-  if (setenv("MODULAR_MOJO_MAX_SHARED_LIBS", sharedLibraries.c_str(), 1) !=
-      0) {
+  if (setenv("MODULAR_MOJO_MAX_SHARED_LIBS", sharedLibraries.c_str(), 1) != 0) {
     std::cerr << "xmojo: cannot configure CompilerRT loader path\n";
     return 1;
   }
@@ -94,6 +100,11 @@ int runCompilerCommand(const std::string &command, int argc, char **argv) {
 } // namespace
 
 int main(int argc, char **argv) {
+  if (argc > 1) {
+    std::string command = argv[1];
+    if (command == "build" || command == "precompile")
+      return runCompilerCommand(command, argc, argv);
+  }
   xmojo::SessionOptions options;
   if (auto error = xmojo::extractSessionOptions(argc, argv, options)) {
     std::cerr << "xmojo: " << *error << '\n';
@@ -114,14 +125,6 @@ int main(int argc, char **argv) {
   }
   if (command == "kernel")
     return xmojo::runKernel(argc - 1, argv + 1, std::move(options));
-  if (command == "build" || command == "precompile") {
-    if (!options.targetAccelerator.empty()) {
-      std::cerr << "xmojo: --modular-gpu is only supported by interactive "
-                   "sessions\n";
-      return 2;
-    }
-    return runCompilerCommand(command, argc, argv);
-  }
   if (command == "-e" || command.front() != '-')
     return xmojo::runREPL(argc, argv, std::move(options));
 

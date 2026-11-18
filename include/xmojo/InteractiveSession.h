@@ -96,10 +96,6 @@ struct CompletenessResult {
 struct SessionOptions {
   std::vector<std::string> importPaths;
   std::string targetAccelerator;
-  std::string gpuRuntimeLibrary;
-  std::string gpuCacheDirectory;
-  std::string officialMojoCompiler;
-  std::string officialModularHome;
   OutputCallback output;
   DisplayCallback display;
 };
