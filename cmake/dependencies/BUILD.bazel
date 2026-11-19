@@ -34,7 +34,7 @@ cc_library(
         "//conditions:default": [],
     }),
     visibility = ["//visibility:public"],
-    deps = [":xeus_archive"] + select({
+    deps = [":xeus_archive", "@@boringssl+//:crypto"] + select({
         "@platforms//os:linux": [":xmojo_uuid_archive"],
         "//conditions:default": [],
     }),

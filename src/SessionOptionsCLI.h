@@ -22,14 +22,6 @@ extractSessionOptions(int &argc, char **argv, SessionOptions &options) {
     std::string *destination = nullptr;
     if (argument == "--target-accelerator")
       destination = &options.targetAccelerator;
-    else if (argument == "--gpu-runtime-library")
-      destination = &options.gpuRuntimeLibrary;
-    else if (argument == "--gpu-cache-directory")
-      destination = &options.gpuCacheDirectory;
-    else if (argument == "--mojo-compiler")
-      destination = &options.officialMojoCompiler;
-    else if (argument == "--modular-home")
-      destination = &options.officialModularHome;
 
     if (!destination) {
       argv[writeIndex++] = argv[readIndex++];

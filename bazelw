@@ -13,7 +13,7 @@ fi
 script_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 deps_root="${XMOJO_DEPS_ROOT:-$(dirname "$script_root")}"
 modular_root="${XMOJO_MODULAR_ROOT:-$deps_root/modular}"
-if [[ "$modular_root" != /* || ! -x "$modular_root/bazelw" || ! -f "$modular_root/bazel/mojo.MODULE.bazel" ]]; then
+if [[ "$modular_root" != /* || ! -x "$modular_root/bazelw" || ! -f "$modular_root/MODULE.bazel" ]]; then
   echo "XMOJO_MODULAR_ROOT must be an absolute Modular checkout path" >&2
   exit 2
 fi
@@ -37,21 +37,21 @@ if [[ -n "${BBUDDY_API_KEY:-}" ]]; then
     "--remote_instance_name=xmojo"
     "--remote_upload_local_results=true"
   )
-elif [[ "${XMOJO_PUBLIC_CACHE:-0}" == "1" ]]; then
-  action_args+=(
-    "--config=public-cache"
-    "--remote_header=x-buildbuddy-api-key=gJPttl2LQEONgD2aKziQ"
-    "--remote_upload_local_results=false"
-  )
+else
+  # Upstream enables public cache reads by default. Keep local build logs local.
+  action_args+=("--bes_backend=" "--bes_results_url=" "--remote_upload_local_results=false")
 fi
 if [[ "$(uname -s)" == "Darwin" ]]; then
   developer_dir="$(xcode-select -p)"
   xcode_build_number="$(/usr/bin/xcodebuild -version | awk '/Build version/ {print $3}')"
+  sdk_root="$(xcrun --sdk macosx --show-sdk-path)"
   action_args+=(
     "--action_env=DEVELOPER_DIR=$developer_dir"
     "--host_action_env=DEVELOPER_DIR=$developer_dir"
     "--repo_env=DEVELOPER_DIR=$developer_dir"
     "--repo_env=XCODE_VERSION=$xcode_build_number"
+    "--test_env=DEVELOPER_DIR=$developer_dir"
+    "--test_env=SDKROOT=$sdk_root"
   )
 fi
 
@@ -64,7 +64,7 @@ for arg in "$@"; do
     --extra_toolchains | --extra_toolchains=* | \
     --check_visibility | --check_visibility=* | --nocheck_visibility | \
     --output_user_root | --output_user_root=* | \
-    --config | --config=build-mojo)
+    --config)
     echo "bazelw owns $arg; configure it in the wrapper rather than per invocation" >&2
     exit 2
     ;;
@@ -86,16 +86,6 @@ aquery | build | cquery | run | test)
   needs_xeus=0
   for target in "$@"; do
     case "$target" in
-    *@xmojo//:gpu_launcher* | *@xmojo//:gpu_shared_library_test*)
-      uses_xmojo=1
-      pixi install --manifest-path "$script_root/pixi.toml"
-      if [[ "$command" == test ]]; then
-        action_args+=(
-          "--test_env=XMOJO_MOJO_COMPILER=$script_root/.pixi/envs/default/bin/mojo"
-          "--test_env=XMOJO_MODULAR_HOME=$script_root/.pixi/envs/default/share/max"
-        )
-      fi
-      ;;
     *@xmojo//*)
       uses_xmojo=1
       needs_xeus=1
@@ -104,11 +94,6 @@ aquery | build | cquery | run | test)
   done
   repository_args=("--inject_repository=xmojo=$script_root")
   if (( uses_xmojo )); then
-    if ! grep -Fqx 'llvm_configure.configure(extra_targets = ["SPIRV"])' \
-      "$modular_root/MODULE.bazel"; then
-      echo 'modular/MODULE.bazel must enable llvm_configure extra target "SPIRV"; see xmojo/DEV.md' >&2
-      exit 2
-    fi
     if (( needs_xeus )); then
       "$script_root/tools/build_xeus_deps.sh" "$xeus_deps_root" "$output_user_root"
     else
@@ -116,10 +101,9 @@ aquery | build | cquery | run | test)
     fi
     repository_args+=("--inject_repository=xmojo_deps=$xeus_deps_root/install")
   fi
-  exec "$modular_root/bazelw" "${startup_args[@]}" "$command" --config=build-mojo \
+  exec "$modular_root/bazelw" "${startup_args[@]}" "$command" \
     "${action_args[@]}" \
     --check_visibility=false \
-    --extra_toolchains=@xmojo//bazel:official_mojo_toolchain \
     "${repository_args[@]}" "$@"
   ;;
 *)

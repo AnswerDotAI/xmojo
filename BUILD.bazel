@@ -1,11 +1,12 @@
 load(
     "@//bazel:api.bzl",
     "mojo_library",
-    "mojo_overlay_layer",
-    "mojo_overlay_srcs",
+    "overlay_layer",
+    "overlay_srcs",
     "mojo_test_environment",
 )
 load("@bazel_skylib//rules:copy_file.bzl", "copy_file")
+load("//bazel:wheel_runtime.bzl", "wheel_runtime")
 load(
     "//bazel:versions.bzl",
     "XMOJO_VERSION",
@@ -15,19 +16,33 @@ load("@rules_cc//cc:cc_library.bzl", "cc_library")
 load("@rules_cc//cc:cc_test.bzl", "cc_test")
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
 
-mojo_overlay_layer(
+# Link the native compiler and runtime together, with one owner of each
+# process-wide registry. JIT code finds the runtime through ORC's process search.
+_NATIVE_DYNAMIC_DEPS = [
+    "@//AsyncRT:RuntimeGlobals",
+    "@//MLRT:Driver/Compilation",
+    "@//MLRT:Driver/DeviceContext",
+    "@//MLRT:Driver/Runtime",
+    "@//Mojo:CompilerRT",
+    "@//Support:Globals",
+    "@//bazel/internal:MLIR",
+    "@llvm-project//clang:clangBasic",
+    "@llvm-project//llvm:LLVM",
+]
+
+overlay_layer(
     name = "modular_stdlib_sources",
-    srcs = ["@//mojo/stdlib/std:std_srcs"],
-    strip_prefix = "mojo/stdlib/std/",
+    srcs = ["@//Mojo/stdlib/std:std_srcs"],
+    strip_prefix = "Mojo/stdlib/std/",
 )
 
-mojo_overlay_layer(
+overlay_layer(
     name = "xmojo_stdlib_sources",
     srcs = glob(["mojo/stdlib/std/**/*.mojo"]),
     strip_prefix = "mojo/stdlib/std/",
 )
 
-mojo_overlay_srcs(
+overlay_srcs(
     name = "overlaid_stdlib_sources",
     layers = [
         ":modular_stdlib_sources",
@@ -40,7 +55,7 @@ mojo_library(
     name = "std",
     srcs = [":overlaid_stdlib_sources"],
     validate_missing_docs = False,
-    deps = ["@//KGEN:CompilerRT"],
+    deps = ["@//Mojo:CompilerRT.import"],
 )
 
 mojo_library(
@@ -49,40 +64,16 @@ mojo_library(
     validate_missing_docs = False,
     deps = [
         ":std",
-        "@modular_wheel//:AsyncRTMojoBindings_lib",
+        "@//MLRT:Driver/DeviceContext.import",
     ],
 )
 
 mojo_test_environment(
     name = "stdlib_environment",
     data = [
-        ":std",
-        "//mojo/xmojo:xmojo",
-    ],
-)
-
-mojo_test_environment(
-    name = "gpu_environment",
-    data = [
         ":max",
         ":std",
         "//mojo/xmojo:xmojo",
-    ],
-)
-
-cc_library(
-    name = "spirv_target",
-    srcs = ["src/compiler/XMojoSPIRVTarget.cpp"],
-    alwayslink = True,
-    deps = [
-        "@//KGEN:KGENDialect",
-        "@//KGEN:TargetBackend.headers",
-        "@//KGEN:TargetLowering",
-        "@//KGEN:TargetTraits",
-        "@llvm-project//llvm:Core",
-        "@llvm-project//llvm:Support",
-        "@llvm-project//llvm:Target",
-        "@llvm-project//mlir:IR",
     ],
 )
 
@@ -93,22 +84,24 @@ cc_library(
         "src/compiler/*.h",
     ]),
     hdrs = ["include/xmojo/InteractiveSession.h"],
-    data = ["@//KGEN:CompilerRT"],
+    data = ["@//Mojo:CompilerRT"],
     strip_include_prefix = "include",
     deps = [
-        ":spirv_target",
         "@//AsyncRT:CompilerSupport",
         "@//AsyncRT:Runtime",
         "@//Init",
-        "@//KGEN:Compiler",
-        "@//KGEN:ExecutionEngine",
-        "@//KGEN:KGENDialect",
-        "@//KGEN:LITDialect",
-        "@//KGEN:MojoParser",
-        "@//KGEN:MojoTooling",
-        "@//KGEN:ObjectCompiler",
-        "@//KGEN:ToolCommon",
-        "@//KGEN:TransformUtils",
+        "@//MLRT:Driver/DeviceContextHeaders",
+        "@//MLRT:Driver/DeviceContext.static",
+        "@//Mojo:Compiler",
+        "@//Mojo:ExecutionEngine",
+        "@//Mojo:KGENDialect",
+        "@//Mojo:LITDialect",
+        "@//Mojo:MojoParser",
+        "@//Mojo:REPLSupport",
+        "@//Mojo:MojoTooling",
+        "@//Mojo:ObjectCompiler",
+        "@//Mojo:ToolCommon",
+        "@//Mojo:TransformUtils",
         "@//Support:Context",
         "@//Support:Filesystem",
         "@//Support:MDialect",
@@ -119,21 +112,22 @@ cc_library(
 )
 
 cc_test(
-    name = "gpu_shared_library_test",
-    srcs = ["tests/gpu_shared_library_test.cpp"],
+    name = "gpu_test",
+    srcs = ["tests/gpu_test.cpp"],
     data = [
-        ":gpu_environment",
-        "@module_platlib_macos_arm64//:modular/lib/libAsyncRTMojoBindings.dylib",
+        ":stdlib_environment",
     ],
-    args = ["$(rootpath @module_platlib_macos_arm64//:modular/lib/libAsyncRTMojoBindings.dylib)"],
     env = {
         "MODULAR_CRASH_REPORTING_ENABLED": "0",
+        # Upstream Bazel disables the pool; allow direct device allocations.
         "MODULAR_DEVICE_CONTEXT_MEMORY_MANAGER_ONLY": "false",
-        "MODULAR_DEVICE_CONTEXT_MEMORY_MANAGER_SIZE": "0",
         "MODULAR_MOJO_MAX_IMPORT_PATH": "$(COMPUTED_IMPORT_PATH)",
+        "MODULAR_MOJO_MAX_COMPILERRT_PATH": "$(COMPILER_RT_PATH)",
+        "MODULAR_MOJO_MAX_SHARED_LIBS": "$(COMPUTED_LIBS)",
     },
-    target_compatible_with = ["@platforms//os:macos"],
-    toolchains = [":gpu_environment"],
+    tags = ["manual", "requires-gpu"],
+    toolchains = [":stdlib_environment"],
+    dynamic_deps = _NATIVE_DYNAMIC_DEPS,
     deps = [
         ":interactive_session",
         "@llvm-project//third-party/unittest:gtest",
@@ -167,16 +161,18 @@ cc_binary(
     ],
     env = {
         "MODULAR_CRASH_REPORTING_ENABLED": "0",
-        "MODULAR_MOJO_MAX_COMPILERRT_PATH": "$(COMPILER_RT_PATH)",
         "MODULAR_MOJO_MAX_IMPORT_PATH": "$(COMPUTED_IMPORT_PATH)",
+        "MODULAR_MOJO_MAX_COMPILERRT_PATH": "$(COMPILER_RT_PATH)",
+        "MODULAR_MOJO_MAX_SHARED_LIBS": "$(COMPUTED_LIBS)",
         "XMOJO_COMPILER_STDLIB_PATH": "$(rootpath //mojo/compiler_std:std)",
     },
     local_defines = ['XMOJO_VERSION=\\"%s\\"' % XMOJO_VERSION],
     toolchains = [":stdlib_environment"],
+    dynamic_deps = _NATIVE_DYNAMIC_DEPS,
     deps = [
         ":interactive_session",
         ":mojo_interpreter",
-        "@//KGEN/tools/mojo:mojo_common",
+        "@//Mojo/tools/mojo:mojo_common",
         "@xmojo_deps//:xeus_zmq",
     ],
 )
@@ -194,46 +190,9 @@ copy_file(
     is_executable = True,
 )
 
-copy_file(
-    name = "wheel_compiler_rt_macos",
-    src = "@//KGEN:CompilerRT",
-    out = "python/xmojo/lib/libKGENCompilerRTShared.dylib",
-    target_compatible_with = ["@platforms//os:macos"],
-)
-
-copy_file(
-    name = "wheel_compiler_rt_linux",
-    src = "@//KGEN:CompilerRT",
-    out = "python/xmojo/lib/libKGENCompilerRTShared.so",
-    target_compatible_with = ["@platforms//os:linux"],
-)
-
-copy_file(
-    name = "wheel_support_globals_macos",
-    src = "@//Support:Globals",
-    out = "python/xmojo/lib/libMSupportGlobals.dylib",
-    target_compatible_with = ["@platforms//os:macos"],
-)
-
-copy_file(
-    name = "wheel_support_globals_linux",
-    src = "@//Support:Globals",
-    out = "python/xmojo/lib/libMSupportGlobals.so",
-    target_compatible_with = ["@platforms//os:linux"],
-)
-
-copy_file(
-    name = "wheel_async_rt_globals_macos",
-    src = "@//AsyncRT:RuntimeGlobals",
-    out = "python/xmojo/lib/libAsyncRTRuntimeGlobals.dylib",
-    target_compatible_with = ["@platforms//os:macos"],
-)
-
-copy_file(
-    name = "wheel_async_rt_globals_linux",
-    src = "@//AsyncRT:RuntimeGlobals",
-    out = "python/xmojo/lib/libAsyncRTRuntimeGlobals.so",
-    target_compatible_with = ["@platforms//os:linux"],
+wheel_runtime(
+    name = "wheel_runtime",
+    deps = _NATIVE_DYNAMIC_DEPS,
 )
 
 copy_file(
@@ -250,14 +209,28 @@ copy_file(
 
 copy_file(
     name = "wheel_xmojo_package",
-    src = "//mojo/xmojo:xmojo_base",
-    out = "python/xmojo/mojo/base/xmojo.mojoc",
+    src = "//mojo/xmojo:xmojo",
+    out = "python/xmojo/mojo/xmojo.mojoc",
 )
 
 copy_file(
-    name = "wheel_xmojo_modular_gpu_package",
-    src = "//mojo/xmojo:xmojo",
-    out = "python/xmojo/mojo/modular_gpu/xmojo.mojoc",
+    name = "wheel_max",
+    src = ":max",
+    out = "python/xmojo/mojo/max.mojoc",
+)
+
+[
+    copy_file(
+        name = "wheel_license_" + name,
+        src = "@//Licenses:" + name,
+        out = "python/xmojo/licenses/" + name,
+    )
+    for name in ["MAX_LICENSE", "Third-Party-Notices"]
+]
+
+filegroup(
+    name = "wheel_licenses",
+    srcs = [":wheel_license_MAX_LICENSE", ":wheel_license_Third-Party-Notices"],
 )
 
 filegroup(
@@ -266,38 +239,11 @@ filegroup(
         ":wheel_compiler_std",
         ":wheel_std",
         ":wheel_xmojo_binary",
-        ":wheel_xmojo_modular_gpu_package",
+        ":wheel_max",
         ":wheel_xmojo_package",
-    ] + select({
-        "@platforms//os:macos": [
-            ":wheel_async_rt_globals_macos",
-            ":wheel_compiler_rt_macos",
-            ":wheel_support_globals_macos",
-        ],
-        "@platforms//os:linux": [
-            ":wheel_async_rt_globals_linux",
-            ":wheel_compiler_rt_linux",
-            ":wheel_support_globals_linux",
-        ],
-    }),
-)
-
-cc_test(
-    name = "spirv_target_test",
-    srcs = ["tests/spirv_target_test.cpp"],
-    data = [":stdlib_environment"],
-    env = {
-        "MODULAR_CRASH_REPORTING_ENABLED": "0",
-        "MODULAR_MOJO_MAX_IMPORT_PATH": "$(COMPUTED_IMPORT_PATH)",
-    },
-    toolchains = [":stdlib_environment"],
-    deps = [
-        ":interactive_session",
-        "@llvm-project//third-party/unittest:gtest",
-    ] + select({
-        "@platforms//os:macos": ["@//bazel/internal:gtest_main_objc_pool_check"],
-        "//conditions:default": ["@llvm-project//third-party/unittest:gtest_main"],
-    }),
+        ":wheel_runtime",
+        ":wheel_licenses",
+    ],
 )
 
 cc_test(
@@ -307,8 +253,11 @@ cc_test(
     env = {
         "MODULAR_CRASH_REPORTING_ENABLED": "0",
         "MODULAR_MOJO_MAX_IMPORT_PATH": "$(COMPUTED_IMPORT_PATH)",
+        "MODULAR_MOJO_MAX_COMPILERRT_PATH": "$(COMPILER_RT_PATH)",
+        "MODULAR_MOJO_MAX_SHARED_LIBS": "$(COMPUTED_LIBS)",
     },
     toolchains = [":stdlib_environment"],
+    dynamic_deps = _NATIVE_DYNAMIC_DEPS,
     deps = [
         ":interactive_session",
         "@llvm-project//third-party/unittest:gtest",
@@ -325,8 +274,11 @@ cc_test(
     env = {
         "MODULAR_CRASH_REPORTING_ENABLED": "0",
         "MODULAR_MOJO_MAX_IMPORT_PATH": "$(COMPUTED_IMPORT_PATH)",
+        "MODULAR_MOJO_MAX_COMPILERRT_PATH": "$(COMPILER_RT_PATH)",
+        "MODULAR_MOJO_MAX_SHARED_LIBS": "$(COMPUTED_LIBS)",
     },
     toolchains = [":stdlib_environment"],
+    dynamic_deps = _NATIVE_DYNAMIC_DEPS,
     deps = [
         ":mojo_interpreter",
         "@llvm-project//third-party/unittest:gtest",
@@ -350,8 +302,9 @@ sh_test(
     ],
     env = {
         "MODULAR_CRASH_REPORTING_ENABLED": "0",
-        "MODULAR_MOJO_MAX_COMPILERRT_PATH": "$(COMPILER_RT_PATH)",
         "MODULAR_MOJO_MAX_IMPORT_PATH": "$(COMPUTED_IMPORT_PATH)",
+        "MODULAR_MOJO_MAX_COMPILERRT_PATH": "$(COMPILER_RT_PATH)",
+        "MODULAR_MOJO_MAX_SHARED_LIBS": "$(COMPUTED_LIBS)",
         "XMOJO_COMPILER_STDLIB_PATH": "$(rootpath //mojo/compiler_std:std)",
     },
     env_inherit = ["PATH"],
@@ -369,7 +322,33 @@ sh_test(
     env = {
         "MODULAR_CRASH_REPORTING_ENABLED": "0",
         "MODULAR_MOJO_MAX_IMPORT_PATH": "$(COMPUTED_IMPORT_PATH)",
+        "MODULAR_MOJO_MAX_COMPILERRT_PATH": "$(COMPILER_RT_PATH)",
+        "MODULAR_MOJO_MAX_SHARED_LIBS": "$(COMPUTED_LIBS)",
     },
     env_inherit = ["PATH"],
     toolchains = [":stdlib_environment"],
 )
+
+# Explicit GPU tests also exercise the two user-facing transports. They use the
+# same native library and import environment as ordinary CPU sessions.
+[
+    sh_test(
+        name = name,
+        srcs = ["tests/" + name + ".py"],
+        args = ["$(rootpath :xmojo)"],
+        data = [":stdlib_environment", ":xmojo", "tests/gpu_story.py"],
+        env = {
+            "MODULAR_CRASH_REPORTING_ENABLED": "0",
+            # Upstream Bazel disables the pool; allow direct device allocations.
+            "MODULAR_DEVICE_CONTEXT_MEMORY_MANAGER_ONLY": "false",
+            "MODULAR_MOJO_MAX_IMPORT_PATH": "$(COMPUTED_IMPORT_PATH)",
+            "MODULAR_MOJO_MAX_COMPILERRT_PATH": "$(COMPILER_RT_PATH)",
+            "MODULAR_MOJO_MAX_SHARED_LIBS": "$(COMPUTED_LIBS)",
+        },
+        env_inherit = ["PATH"],
+        tags = ["manual", "requires-gpu"],
+        timeout = "long",
+        toolchains = [":stdlib_environment"],
+    )
+    for name in ["gpu_cli_test", "gpu_kernel_test"]
+]

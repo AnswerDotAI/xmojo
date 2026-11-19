@@ -14,20 +14,22 @@
 #include "InteractiveParser.h"
 #include "xmojo/InteractiveSession.h"
 
-#include "KGEN/KGENDialect/KGENDialect.h"
-#include "KGEN/LITDialect/LITAttrs.h"
-#include "KGEN/LITDialect/LITOps.h"
-#include "KGEN/MojoParser/ASTDecl.h"
-#include "KGEN/MojoParser/DeclResolver.h"
-#include "KGEN/MojoParser/EntryPoint.h"
-#include "KGEN/MojoParser/ExprNode.h"
-#include "KGEN/MojoParser/IRValues.h"
-#include "KGEN/MojoParser/Lexer.h"
-#include "KGEN/MojoParser/SharedState.h"
-#include "KGEN/MojoTooling/CodeComplete.h"
-#include "KGEN/MojoTooling/ParserDriver.h"
-#include "KGEN/MojoTooling/PublicASTDecl.h"
-#include "KGEN/lib/MojoParser/ParserBase.h"
+#include "Mojo/KGENDialect/KGENDialect.h"
+#include "Mojo/LITDialect/LITAttrs.h"
+#include "Mojo/LITDialect/LITOps.h"
+#include "Mojo/MojoParser/ASTDecl.h"
+#include "Mojo/MojoParser/DeclResolver.h"
+#include "Mojo/MojoParser/EntryPoint.h"
+#include "Mojo/MojoParser/ExprNode.h"
+#include "Mojo/MojoParser/IRValues.h"
+#include "Mojo/MojoParser/Lexer.h"
+#include "Mojo/MojoParser/SharedState.h"
+#include "Mojo/MojoREPL/REPL.h"
+#include "Mojo/MojoTooling/CodeComplete.h"
+#include "Mojo/MojoTooling/DeclRendering.h"
+#include "Mojo/MojoTooling/ParserDriver.h"
+#include "Mojo/ToolCommon/FrontendOptions.h"
+#include "Mojo/lib/MojoParser/ParserBase.h"
 #include "Support/Compiler/Diags.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributes.h"
@@ -181,10 +183,9 @@ bool takeTopLevelStatement(unsigned &line, ArrayRef<StringRef> lines,
                            SmallVectorImpl<StringRef> &topLevel) {
   StringRef current = lines[line];
   bool declaration = isDeclaration(current);
-  bool topLevelStatement = current.starts_with("@") || declaration ||
-                           current.starts_with("from ") ||
-                           current.starts_with("alias ") ||
-                           current.starts_with("comptime");
+  bool topLevelStatement =
+      current.starts_with("@") || declaration || current.starts_with("from ") ||
+      current.starts_with("alias ") || current.starts_with("comptime");
   if (!topLevelStatement)
     return false;
 
@@ -252,7 +253,6 @@ void partitionCell(StringRef source, SmallVectorImpl<StringRef> &topLevel,
 
 struct WrappedCell {
   std::string source;
-  std::string declarations;
   CellSourceMap map;
 };
 
@@ -421,7 +421,7 @@ CompletenessResult checkCompleteness(SharedState &state,
 bool canStartTrailingExpression(Token::Kind kind) {
   if (!ParserBase::isPrimaryExprStart(kind))
     return false;
-  return kind != Token::kw_async && kind != Token::kw_comptime &&
+  return kind != Token::kw___async && kind != Token::kw_comptime &&
          kind != Token::kw_def && kind != Token::kw_fn &&
          kind != Token::dot_dot_dot;
 }
@@ -533,11 +533,6 @@ wrapCell(StringRef source, const llvm::MemoryBuffer *sourceBuffer,
       findTrailingExpression(state, sourceBuffer);
 
   WrappedCell wrapped;
-  llvm::raw_string_ostream declarations(wrapped.declarations);
-  for (StringRef line : topLevel)
-    declarations << line << '\n';
-  declarations.flush();
-
   llvm::raw_string_ostream output(wrapped.source);
   output << "def " << functionName << "(__xmojo_slots: __xmojo_cell_slots):\n";
   for (size_t index = 0; index < sessionVars.size(); ++index) {
@@ -581,12 +576,12 @@ wrapCell(StringRef source, const llvm::MemoryBuffer *sourceBuffer,
 
 ASTDecl &
 buildModule(const llvm::MemoryBuffer *sourceBuffer, StringRef moduleName,
-            SharedState &state, M::MojoASTDeclRef previous,
+            SharedState &state, ASTDecl *previous,
             ArrayRef<xmojo::InteractiveParser::PersistentVar> sessionVars) {
   MLIRContext *context = state.getContext();
   auto location =
       FileLineColLoc::get(context, sourceBuffer->getBufferIdentifier(), 1, 1);
-  ASTDecl &module = state.createModule(moduleName, sourceBuffer, location);
+  auto &module = state.createModule(moduleName, sourceBuffer, location);
   (void)state.declResolver->resolveBody(module, module.getLoc());
 
   for (size_t index = 0; index < sessionVars.size(); ++index) {
@@ -600,7 +595,8 @@ buildModule(const llvm::MemoryBuffer *sourceBuffer, StringRef moduleName,
                                     typeValue.getType()),
         typeValue.get());
     state.declResolver->addFullyResolvedDecl(
-        &*typeDecl, persistentTypeName(index), llvm::SMLoc(), &module);
+        &*typeDecl, mlir::StringAttr::get(context, persistentTypeName(index)),
+        llvm::SMLoc(), &module);
   }
 
   if (previous) {
@@ -624,8 +620,7 @@ buildModule(const llvm::MemoryBuffer *sourceBuffer, StringRef moduleName,
                                               module);
   }
 
-  state.declResolver->resolveAllReferencedFrom(module,
-                                               /*eraseUnparsedDecls=*/false);
+  state.declResolver->resolveAllReferencedFrom(module);
   (void)state.declResolver->resolveAllWildcardImports(module);
   return module;
 }
@@ -689,7 +684,7 @@ std::string persistentVariableDeclaration(
     const xmojo::InteractiveParser::PersistentVar &variable,
     SharedState &state) {
   return "var " + variable.name + ": " +
-         M::MojoASTTypeRef(variable.type).getAsString(state);
+         M::KGEN::LIT::ASTType(variable.type).getAsString(&state);
 }
 
 std::string persistentVariableMarkdown(
@@ -699,7 +694,7 @@ std::string persistentVariableMarkdown(
          persistentVariableDeclaration(variable, state) + "\n```";
 }
 
-class REPLListener final : public M::MojoParserREPLListener {
+class REPLListener final : public M::MojoREPLListener {
 public:
   void notifyWrappedExpr(StringRef) override {}
   void notifyFixedExpr(StringRef) override {}
@@ -710,7 +705,7 @@ public:
 class ReferenceCollector final : public M::KGEN::LIT::ParserListener {
 public:
   struct Reference {
-    SmallVector<M::MojoASTDeclRef> declarations;
+    SmallVector<ASTDecl *> declarations;
     llvm::SMRange range;
   };
 
@@ -722,8 +717,7 @@ public:
       return;
     Reference &reference = references.emplace_back();
     reference.range = range;
-    llvm::transform(declarations, std::back_inserter(reference.declarations),
-                    [](ASTDecl *decl) { return M::MojoASTDeclRef(decl); });
+    llvm::append_range(reference.declarations, declarations);
   }
 
   bool collecting = false;
@@ -757,12 +751,12 @@ convertCompletionKind(M::KGEN::Mojo::CodeCompletionResult::Kind kind) {
 class ToolingState {
 public:
   ToolingState(MLIRContext &context, const M::KGEN::CompilationOptions &options,
-               ArrayRef<std::string> importPaths)
-      : parserConfig(&context, options) {
+               ArrayRef<std::string> importPaths) {
     sourceManager.setIncludeDirs(importPaths);
-    parserConfig.parserListener = &references;
-    parserContext =
-        std::make_unique<M::MojoParserContext>(sourceManager, parserConfig);
+    frontendOptions.parserListener = &references;
+    parserContext = std::make_unique<M::MojoParserContext>(
+        sourceManager, &context, options, frontendOptions);
+    replContext = std::make_unique<M::MojoREPLContext>(*parserContext);
   }
 
   void record(StringRef source, StringRef moduleName,
@@ -771,8 +765,8 @@ public:
         llvm::MemoryBuffer::getMemBufferCopy(source, moduleName),
         llvm::SMLoc());
     auto types = variableTypes(variables);
-    (void)parserContext->parseREPLExpression(replListener, id,
-                                             "__xmojo_tooling_cell", types);
+    (void)replContext->parseExpression(replListener, id, "__xmojo_tooling_cell",
+                                       types);
   }
 
   CompletionResult
@@ -787,13 +781,13 @@ public:
       --result.cursorStart;
 
     auto types = variableTypes(variables);
-    auto completions = parserContext->codeCompleteREPLExpression(
-        source, cursorPosition, types);
+    auto completions = replContext->codeComplete(source, cursorPosition, types);
     result.items.reserve(completions.size());
     for (auto &completion : completions) {
       result.items.push_back({std::move(completion.label),
                               std::move(completion.documentation),
-                              convertCompletionKind(completion.kind)});
+                              convertCompletionKind(completion.kind),
+                              {}});
     }
     return result;
   }
@@ -812,28 +806,26 @@ public:
         llvm::SMLoc());
     const llvm::MemoryBuffer *buffer = sourceManager.getMemoryBuffer(id);
     auto types = variableTypes(variables);
-    auto parsed = parserContext->parseREPLExpression(
+    auto parsed = replContext->parseExpression(
         replListener, id, "__xmojo_inspection_cell", types);
     references.collecting = false;
     if (!parsed.isValid())
       return inspectPersistent(source, cursorPosition, variables);
-    parserContext->removeLastREPLExpression();
+    replContext->removeLastExpression();
 
     const char *cursor = buffer->getBufferStart() + cursorPosition;
     for (const ReferenceCollector::Reference &reference :
          references.references) {
       llvm::SMRange range =
-          parserContext->getREPLLocMapper().mapRange(reference.range);
+          replContext->getLocMapper().mapRange(reference.range);
       if (!range.isValid() || cursor < range.Start.getPointer() ||
           cursor > range.End.getPointer())
         continue;
-      for (M::MojoASTDeclRef declaration : reference.declarations) {
-        std::unique_ptr<M::PublicDecl> view = declaration.getDecl();
-        if (!view)
-          continue;
+      for (ASTDecl *declaration : reference.declarations) {
         if (!result.markdown.empty())
           result.markdown += "\n---\n\n";
-        result.markdown += view->getFullMarkdownString(*parserContext);
+        result.markdown +=
+            M::KGEN::LIT::getDeclFullMarkdownString(*declaration);
       }
       result.found = !result.markdown.empty();
       if (result.found)
@@ -896,8 +888,9 @@ private:
 
   llvm::SourceMgr sourceManager;
   ReferenceCollector references;
-  M::KGEN::LIT::ParserConfig parserConfig;
+  M::KGEN::FrontendOptions frontendOptions;
   std::unique_ptr<M::MojoParserContext> parserContext;
+  std::unique_ptr<M::MojoREPLContext> replContext;
   REPLListener replListener;
 };
 
@@ -907,8 +900,7 @@ class xmojo::InteractiveParser::Impl {
 public:
   Impl(MLIRContext &context, const M::KGEN::CompilationOptions &options,
        std::vector<std::string> importPaths)
-      : parserConfig(&context, options),
-        parserContext(sourceManager, parserConfig) {
+      : parserContext(sourceManager, &context, options, frontendOptions) {
     sourceManager.setIncludeDirs(importPaths);
     tooling = std::make_unique<ToolingState>(context, options, importPaths);
   }
@@ -992,12 +984,7 @@ public:
                              "interactive cell entry point was not produced"});
       return std::nullopt;
     }
-    Cell cell{M::MojoASTDeclRef(&module),
-              M::MojoASTDeclRef(entryPoint),
-              source.str(),
-              std::move(wrapped.declarations),
-              moduleName.str(),
-              {}};
+    Cell cell{&module, entryPoint, source.str(), moduleName.str(), {}};
     if (!collectDeclaredVarTypes(*entryPoint, declaredVars, cell.newVars)) {
       diagnostics.push_back({DiagnosticSeverity::Error,
                              "interactive cell declared a variable "
@@ -1046,9 +1033,9 @@ public:
   }
 
   llvm::SourceMgr sourceManager;
-  M::KGEN::LIT::ParserConfig parserConfig;
+  M::KGEN::FrontendOptions frontendOptions;
   M::MojoParserContext parserContext;
-  M::MojoASTDeclRef committedModule;
+  ASTDecl *committedModule = nullptr;
   std::vector<PersistentVar> persistentVars;
   std::vector<std::unique_ptr<CellSourceMap>> maps;
   std::unique_ptr<ToolingState> tooling;

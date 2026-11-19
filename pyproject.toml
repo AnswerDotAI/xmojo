@@ -11,9 +11,6 @@ requires-python = ">=3.9"
 license = "Apache-2.0 WITH LLVM-exception"
 license-files = ["LICENSE"]
 
-[project.optional-dependencies]
-modular-gpu = ["max-core==26.6.0.dev2026082605"]
-
 [project.scripts]
 xmojo = "xmojo._cli:xmojo"
 
@@ -30,7 +27,6 @@ include-package-data = false
 "share/jupyter/kernels/xmojo" = ["share/jupyter/kernels/xmojo/kernel.json"]
 
 [tool.uv]
-preview-features = ["index-exclude-newer"]
 cache-keys = [
   {file = "pyproject.toml"},
   {file = "setup.py"},
@@ -48,14 +44,6 @@ cache-keys = [
   {env = "XMOJO_MODULAR_ROOT"},
 ]
 
-[tool.uv.sources]
-max-core = {index = "modular-nightly"}
-
 [tool.fastship]
 release = "tag"
 version-files = ["bazel/versions.bzl"]
-
-[[tool.uv.index]]
-name = "modular-nightly"
-url = "https://whl.modular.com/nightly/simple/"
-exclude-newer = false

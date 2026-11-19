@@ -90,16 +90,12 @@ representation; other values receive a type-name fallback.
 - Persistent variables cannot be redeclared or implicitly captured by functions defined in other cells.
 - GPU support is opt-in and currently targets top-level noncapturing kernels.
 
-## Modular GPU
+## GPU support
 
-GPU sessions use the exactly matched official Mojo compiler and MAX runtime.
-Install the optional dependency from Modular's nightly package index:
-
-```bash
-uv pip install --prerelease=allow \
-  --extra-index-url https://whl.modular.com/nightly/simple/ \
-  'xmojo[modular-gpu]'
-```
+The REPL and Jupyter kernel use Modular's native GPU compiler and runtime.
+Use the normal `max.gpu` APIs in either frontend; no GPU-specific launch flag,
+separate Mojo compiler, or `max-core` Python installation is needed. The session
+detects the local accelerator. `--target-accelerator` overrides that choice.
 
 On Apple Silicon, install Xcode's optional Metal toolchain once:
 
@@ -107,53 +103,33 @@ On Apple Silicon, install Xcode's optional Metal toolchain once:
 xcodebuild -downloadComponent MetalToolchain
 ```
 
-Start a GPU-enabled REPL with:
-
-```bash
-xmojo --modular-gpu
-```
-
-The launcher detects the local accelerator and supplies the matched compiler,
-MAX imports, and AsyncRT runtime automatically. Compile and launch an ordinary
-top-level Mojo function:
+For example, run this in a notebook cell or paste it into the REPL:
 
 ```mojo
-from std.gpu import global_idx
+from max.gpu import global_idx
 from max.gpu.host import DeviceContext
-from xmojo.gpu import compile
 
-def increment(output: Pointer[Float32, MutAnyOrigin], size: Int32):
+def increment[amount: Int](output: Pointer[Float32, MutAnyOrigin], size: Int32):
     var i = global_idx.x
     if i < Int(size):
-        output[unsafe_offset=i] += 1
+        output[unsafe_offset=i] += Float32(amount)
 
 with DeviceContext() as context:
-    var buffer = context.enqueue_create_buffer[DType.float32](256)
-    var kernel = compile[increment](context)
-    kernel.enqueue(buffer, Int32(256), grid_dim=1, block_dim=256)
+    var buffer = context.enqueue_create_buffer[DType.float32](16)
+    buffer.enqueue_fill(0)
+    context.enqueue_function[increment[2]](
+        buffer, Int32(16), grid_dim=1, block_dim=16
+    )
     context.synchronize()
+    with buffer.map_to_host() as values:
+        print(values[0])  # 2.0
 ```
 
-`compile[...]` caches device objects under `~/Library/Caches/xmojo/gpu`.
-Set `XMOJO_GPU_CACHE_DIR` to choose another directory. Kernels must currently
-be top-level, nonparameterized, noncapturing functions with an ordinary name.
-Launch argument count and device types are checked while compiling the cell.
-
-The installed Jupyter kernelspec is CPU-only. To add a separate GPU kernel:
-
-```bash
-gpu_kernel="$(jupyter --data-dir)/kernels/xmojo-gpu"
-mkdir -p "$gpu_kernel"
-cat > "$gpu_kernel/kernel.json" <<'JSON'
-{
-  "argv": ["xmojo", "--modular-gpu", "kernel", "-f", "{connection_file}"],
-  "display_name": "Mojo (xmojo, Modular GPU)",
-  "language": "mojo"
-}
-JSON
-```
-
-Select **Mojo (xmojo, Modular GPU)** in Jupyter.
+Imports, kernel definitions, and owned device contexts and buffers can persist
+across cells. GPU compilation and launch use the same in-process pipeline as
+ordinary Mojo code. Hardware support and platform prerequisites follow the
+pinned Modular revision. See [the GPU integration notes](docs/modular-gpu-pipeline.md)
+for the compiler boundary and GPU tests.
 
 ## REPL
 
@@ -225,3 +201,5 @@ testing, and contributor workflow.
 ## License
 
 Apache License v2.0 with LLVM Exceptions. See [LICENSE](LICENSE).
+Bundled Modular components retain their upstream licenses and third-party
+notices, included under `xmojo/_native/licenses` in the installed package.

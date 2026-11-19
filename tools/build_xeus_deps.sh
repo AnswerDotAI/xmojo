@@ -29,8 +29,16 @@ fi
 
 case "$(uname -s)" in
 Darwin)
-  cmake_platform_args+=("-DCMAKE_OSX_DEPLOYMENT_TARGET=$deployment_target")
-  cache_platform_checks+=("CMAKE_OSX_DEPLOYMENT_TARGET:$deployment_target")
+  # Keep the SDK and compiler from the same selected Xcode installation.
+  sdk_root="$(xcrun --sdk macosx --show-sdk-path)"
+  cmake_platform_args+=(
+    "-DCMAKE_OSX_DEPLOYMENT_TARGET=$deployment_target"
+    "-DCMAKE_OSX_SYSROOT=$sdk_root"
+  )
+  cache_platform_checks+=(
+    "CMAKE_OSX_DEPLOYMENT_TARGET:$deployment_target"
+    "CMAKE_OSX_SYSROOT:$sdk_root"
+  )
   ;;
 Linux)
   case "$(uname -m)" in

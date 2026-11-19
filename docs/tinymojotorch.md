@@ -18,12 +18,12 @@ notebook cell and an exported function use the same tensor API, compiler IR,
 lowering, kernels, and runtime. They differ only in how much of the program the
 compiler can see before execution.
 
-The accelerator compiler and runtime design is covered separately in
-[Modular's accelerator pipeline and xmojo's native GPU
-architecture](modular-gpu-pipeline.md). That document is authoritative for
-KGEN target extension points, portable kernel semantics, artifact formats,
-IREE HAL integration, and backend checkpoints. This document describes the
-tensor programming model and the system above that boundary.
+The current accelerator implementation is documented in
+[Native Modular GPU integration](modular-gpu-pipeline.md). Its native MAX
+compiler and runtime supersede this proposal's custom target, artifact, and
+IREE HAL sections, including the old phase-zero completion notes below. Those
+sections remain historical design context; the tensor programming model is a
+separate proposal, not implemented functionality.
 
 ## Historical lessons
 

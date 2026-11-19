@@ -119,7 +119,7 @@ TEST(InteractiveSessionTest, RunsInteractiveSession) {
 
   ASSERT_TRUE(executionSucceeds(*session, R"(
 from std.collections import List
-alias Count = Int
+comptime Count = Int
 
 @fieldwise_init
 struct Pair:
@@ -366,8 +366,7 @@ print(x, y, owned, multiline)
   EXPECT_NE(variableInspection.markdown.find("var owned: String"),
             std::string::npos);
 
-  auto persistentMemberInspection =
-      session->inspect("owned.byte_length()", 10);
+  auto persistentMemberInspection = session->inspect("owned.byte_length()", 10);
   ASSERT_TRUE(persistentMemberInspection.found);
   EXPECT_NE(persistentMemberInspection.markdown.find("byte_length"),
             std::string::npos);
