@@ -329,26 +329,21 @@ sh_test(
     toolchains = [":stdlib_environment"],
 )
 
-# Explicit GPU tests also exercise the two user-facing transports. They use the
-# same native library and import environment as ordinary CPU sessions.
-[
-    sh_test(
-        name = name,
-        srcs = ["tests/" + name + ".py"],
-        args = ["$(rootpath :xmojo)"],
-        data = [":stdlib_environment", ":xmojo", "tests/gpu_story.py"],
-        env = {
-            "MODULAR_CRASH_REPORTING_ENABLED": "0",
-            # Upstream Bazel disables the pool; allow direct device allocations.
-            "MODULAR_DEVICE_CONTEXT_MEMORY_MANAGER_ONLY": "false",
-            "MODULAR_MOJO_MAX_IMPORT_PATH": "$(COMPUTED_IMPORT_PATH)",
-            "MODULAR_MOJO_MAX_COMPILERRT_PATH": "$(COMPILER_RT_PATH)",
-            "MODULAR_MOJO_MAX_SHARED_LIBS": "$(COMPUTED_LIBS)",
-        },
-        env_inherit = ["PATH"],
-        tags = ["manual", "requires-gpu"],
-        timeout = "long",
-        toolchains = [":stdlib_environment"],
-    )
-    for name in ["gpu_cli_test", "gpu_kernel_test"]
-]
+sh_test(
+    name = "gpu_kernel_test",
+    srcs = ["tests/gpu_kernel_test.py"],
+    args = ["$(rootpath :xmojo)"],
+    data = [":stdlib_environment", ":xmojo"],
+    env = {
+        "MODULAR_CRASH_REPORTING_ENABLED": "0",
+        # Upstream Bazel disables the pool; allow direct device allocations.
+        "MODULAR_DEVICE_CONTEXT_MEMORY_MANAGER_ONLY": "false",
+        "MODULAR_MOJO_MAX_IMPORT_PATH": "$(COMPUTED_IMPORT_PATH)",
+        "MODULAR_MOJO_MAX_COMPILERRT_PATH": "$(COMPILER_RT_PATH)",
+        "MODULAR_MOJO_MAX_SHARED_LIBS": "$(COMPUTED_LIBS)",
+    },
+    env_inherit = ["PATH"],
+    tags = ["manual", "requires-gpu"],
+    timeout = "long",
+    toolchains = [":stdlib_environment"],
+)

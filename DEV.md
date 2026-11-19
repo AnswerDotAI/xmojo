@@ -61,8 +61,7 @@ Run the core stories and, on a GPU host, the hardware stories:
 ```bash
 ./bazelw test @xmojo//:session_test @xmojo//:interpreter_test \
   @xmojo//:cli_test @xmojo//:kernel_test --test_output=errors
-./bazelw test @xmojo//:gpu_test @xmojo//:gpu_cli_test \
-  @xmojo//:gpu_kernel_test --test_output=errors
+./bazelw test @xmojo//:gpu_test @xmojo//:gpu_kernel_test --test_output=errors
 ```
 
 Python frontend tests use `python` on `PATH` and need `conkernelclient`. The GPU
@@ -159,18 +158,22 @@ xmojo publishes platform wheels only; it does not publish a source
 distribution. The wheel tags are `macosx_12_0_arm64`,
 `manylinux_2_35_aarch64`, and `manylinux_2_35_x86_64`.
 
-Each platform wheel packages the native frontend, its shared-library dependency
-graph, ordinary and interactive-overlay `std` packages, `max.mojoc`, and
-`xmojo.mojoc`. The wheel also includes Modular's license and
-third-party notices. Python entry points locate these resources relative to
-`site-packages`, set the explicit CompilerRT and import paths, then replace
-themselves with the native process. REPL and kernel sessions use the overlay;
-`build` and `precompile` select the ordinary stdlib for standalone I/O behavior.
+Each platform wheel packages the native frontend, its shared-library dependencies, the ordinary and interactive-overlay `std` packages, `max.mojoc`, and `xmojo.mojoc`. It includes Modular's license and third-party notices.
+
+The Python launcher sets `MODULAR_MOJO_MAX_PACKAGE_ROOT` to the installed `_native` directory and replaces itself with the native frontend. Modular resolves CompilerRT and standalone linker flags from that package root. The frontend in `bin/` finds shared libraries in `lib/` through relative rpaths. The launcher does not change `LD_LIBRARY_PATH` or `DYLD_LIBRARY_PATH`.
+
+REPL and kernel sessions use the stdlib overlay. `build` and `precompile` select the ordinary stdlib for standalone I/O.
 
 The wheel has no separate Mojo or MAX Python package dependency. Hardware
 runtime requirements, such as the Metal toolchain or GPU drivers, still apply.
-Development assets retain Bazel's default configuration; published wheels use
-`-c opt`.
+Development assets retain Bazel's default configuration. Release wheels use `-c opt`.
+
+Run the CLI and Jupyter stories against an installed wheel:
+
+```bash
+source bazel/versions.bzl
+python tests/wheel_test.py path/to/wheel.whl tests/cli_test.py tests/kernel_test.py "$XMOJO_VERSION"
+```
 
 `bazel/versions.bzl` is authoritative for the source revisions. Updating Modular
 requires rebuilding all compiler, runtime, stdlib, and MAX artifacts together.
@@ -178,9 +181,7 @@ requires rebuilding all compiler, runtime, stdlib, and MAX artifacts together.
 `XMOJO_ALLOW_DIRTY=1` skips only the xmojo cleanliness check for local packaging
 development and must not be used for a published build.
 
-GitHub Actions builds all three platform wheels. Linux jobs use `auditwheel`
-to verify the declared manylinux ABI. Release tags publish through the existing
-trusted-publishing workflow; do not bump the package version during development.
+GitHub Actions builds all three platform wheels. On Linux, `auditwheel show` reports manylinux compatibility. Release tags publish through the existing trusted-publishing workflow. Do not bump the package version during development.
 
 When `BBUDDY_API_KEY` is set, `bazelw` selects xmojo's BuildBuddy configuration.
 Otherwise it uses Modular's read-only public action cache with build-event
@@ -213,11 +214,7 @@ reverse destruction before the ORC engine is destroyed. Compilation failures
 execute nothing. Device work remains asynchronous until the program explicitly
 synchronizes it.
 
-The GPU test targets are `gpu_test`, `gpu_cli_test`, and `gpu_kernel_test`.
-They cover direct `InteractiveSession` execution, the real REPL, and Jupyter
-messages, including parameterized kernels and device allocations spanning cells.
-They are manual hardware tests and must run on a supported GPU host.
-See [the integration notes](docs/modular-gpu-pipeline.md) for details.
+See the [GPU integration notes](docs/modular-gpu-pipeline.md) for platform requirements and what the hardware tests cover.
 
 ## Jupyter frontend
 
@@ -283,7 +280,4 @@ named configurations such as `--config=asan` may be selected explicitly.
 `1.3.0.dev2026111705` and MAX `26.8.0.dev2026111705`. All compiler, stdlib,
 MAX package, and runtime artifacts are built together from that checkout.
 
-When updating Modular, replace the recorded revision and adopt the new APIs
-directly. Run the ordinary session, interpreter, CLI, and kernel tests, then run
-all three GPU targets on each supported hardware backend. Build and test a wheel
-in an isolated Python environment before releasing.
+When updating Modular, replace the recorded revision and adopt the new APIs directly. Run the core tests, exercise the GPU backends you claim to support, and test the installed wheel before releasing.

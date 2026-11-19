@@ -33,13 +33,8 @@ void printUsage() {
 
 int runCompilerCommand(const std::string &command, int argc, char **argv) {
   const char *stdlibFile = std::getenv("XMOJO_COMPILER_STDLIB_PATH");
-  const char *compilerRTFile = std::getenv("MODULAR_MOJO_MAX_COMPILERRT_PATH");
   if (!stdlibFile) {
     std::cerr << "xmojo: XMOJO_COMPILER_STDLIB_PATH is not configured\n";
-    return 1;
-  }
-  if (!compilerRTFile) {
-    std::cerr << "xmojo: MODULAR_MOJO_MAX_COMPILERRT_PATH is not configured\n";
     return 1;
   }
   std::error_code error;
@@ -50,30 +45,11 @@ int runCompilerCommand(const std::string &command, int argc, char **argv) {
               << "': " << error.message() << '\n';
     return 1;
   }
-  std::filesystem::path compilerRTPath =
-      std::filesystem::canonical(compilerRTFile, error);
-  if (error) {
-    std::cerr << "xmojo: cannot locate CompilerRT '" << compilerRTFile
-              << "': " << error.message() << '\n';
-    return 1;
-  }
   std::string importPaths = stdlibPath.parent_path().string();
   if (const char *configured = std::getenv("MODULAR_MOJO_MAX_IMPORT_PATH"))
     importPaths += "," + std::string(configured);
   if (setenv("MODULAR_MOJO_MAX_IMPORT_PATH", importPaths.c_str(), 1) != 0) {
     std::cerr << "xmojo: cannot configure compiler import path\n";
-    return 1;
-  }
-  std::string sharedLibraries;
-  if (const char *configured = std::getenv("MODULAR_MOJO_MAX_SHARED_LIBS")) {
-    sharedLibraries = configured;
-    if (!sharedLibraries.empty())
-      sharedLibraries += ",";
-  }
-  sharedLibraries +=
-      "-Xlinker,-rpath,-Xlinker," + compilerRTPath.parent_path().string();
-  if (setenv("MODULAR_MOJO_MAX_SHARED_LIBS", sharedLibraries.c_str(), 1) != 0) {
-    std::cerr << "xmojo: cannot configure CompilerRT loader path\n";
     return 1;
   }
 

@@ -21,8 +21,7 @@ through a second compiler or implement a separate GPU launch ABI.
 The default accelerator comes from
 `Driver::Device::getAcceleratorArchOrEmpty()`, the same device discovery used by
 Modular's driver. An explicit `SessionOptions::targetAccelerator` or
-`--target-accelerator` overrides it. Availability of a compiler target does not
-imply that matching hardware and driver prerequisites are installed.
+`--target-accelerator` overrides it.
 
 ## Native linking
 
@@ -60,39 +59,27 @@ explicit `context.synchronize()` provides the boundary for checking completion
 and observing asynchronous GPU work; submitting a cell alone is not a device
 synchronization operation.
 
+## GPU platform requirements
+
+Metal requires the [Xcode Metal toolchain](../README.md#gpu-support). An accelerator target in the compiler does not guarantee that the device and driver are available.
+
+Linux GPU execution is unverified in xmojo. The pinned Modular backend requires these components outside the wheel:
+
+- NVIDIA: a CUDA driver and either `libNVPTX.so` (`MODULAR_NVPTX_LIBRARY_PATH`) or a compatible `ptxas` (`MODULAR_NVPTX_COMPILER_PATH`).
+- AMD: a HIP runtime and a compatible `lld` (`MODULAR_MOJO_MAX_LLD_PATH`).
+
 ## Verification
 
-Run the ordinary session and frontend regression tests:
+See [Development layout](../DEV.md#development-layout) for the Bazel commands and test dependencies.
 
-```bash
-./bazelw test @xmojo//:session_test @xmojo//:interpreter_test \
-  @xmojo//:cli_test @xmojo//:kernel_test --test_output=errors
-```
+Run the two hardware tests on each backend you claim to support:
 
-Run the hardware tests explicitly on a supported GPU host:
+- `gpu_test` compiles and launches a Mojo kernel through `InteractiveSession`. It checks readback after repeated launches in independent sessions.
+- `gpu_kernel_test` launches a parameterized kernel with device allocations carried across Jupyter cells. It checks that a cell with a compile error cannot mutate the buffer or prevent later use.
 
-```bash
-./bazelw test @xmojo//:gpu_test @xmojo//:gpu_cli_test \
-  @xmojo//:gpu_kernel_test --test_output=errors
-```
+To exercise the GPU Jupyter story using the installed wheel, pass `tests/gpu_kernel_test.py` in place of `tests/kernel_test.py` to the [wheel test](../DEV.md#python-packaging-and-wheel-layout). The CPU wheel tests do not verify GPU execution.
 
-The GPU targets are tagged `manual` and `requires-gpu`; a machine without a GPU
-must not silently count them as passing. Python frontend tests need
-`conkernelclient` in the `python` environment on `PATH`.
-
-- `gpu_test` compiles and executes an ordinary MAX kernel directly through
-  `InteractiveSession`, checks readback after repeated launches, and repeats
-  the story in independent sessions.
-- `gpu_cli_test` runs the real terminal REPL with a parameterized kernel and
-  persistent device allocations spanning cells.
-- `gpu_kernel_test` runs the same story through Jupyter messages. It also checks
-  that a failed compilation does not execute a preceding buffer mutation and
-  that the kernel remains usable afterward.
-
-These tests must be run for each hardware backend claimed as verified. Passing
-Metal tests alone does not establish NVIDIA or AMD support in xmojo.
-
-## Verified configuration
+## Initial Metal verification
 
 On 2026-11-17, the pinned source build passed all seven session, interpreter,
 CLI, Jupyter, and GPU test targets on an Apple M1 Pro running macOS 27.0.1.
@@ -103,6 +90,7 @@ used the SDK from the selected Xcode, as the macOS Bazel wrapper now supplies.
 
 NVIDIA and AMD hardware, Linux builds, and optimized release wheels were not
 verified in that run.
+
 ## Integration boundaries
 
 | Concern | Owner |
@@ -112,8 +100,3 @@ verified in that run.
 | Target traits, lowering, offload, and object compilation | Modular `Mojo` compiler libraries |
 | Device discovery and runtime services | Modular `MLRT/Driver` and `AsyncRT` |
 | REPL and Jupyter transport | xmojo frontends |
-
-The former external compiler bridge, custom SPIR-V target, and experimental
-IREE runtime are superseded by these upstream components. Changes to Modular's
-private APIs should be adopted directly at the pinned revision, rather than
-adding compatibility branches or restoring a second GPU pipeline.
