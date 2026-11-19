@@ -1,8 +1,6 @@
 # TinyMojoTorch: an imperative, notebook-native tensor system
 
-`TinyMojoTorch` is a working description, not necessarily a project or package
-name. It describes a direction for a small, fully open tensor system built on
-Mojo, MLIR, xmojo, and native accelerator drivers.
+`TinyMojoTorch` is a working name for a small tensor system built on Mojo and MLIR with xmojo as the interactive environment.
 
 The intended result combines four ideas:
 
@@ -18,12 +16,7 @@ notebook cell and an exported function use the same tensor API, compiler IR,
 lowering, kernels, and runtime. They differ only in how much of the program the
 compiler can see before execution.
 
-The current accelerator implementation is documented in
-[Native Modular GPU integration](modular-gpu-pipeline.md). Its native MAX
-compiler and runtime supersede this proposal's custom target, artifact, and
-IREE HAL sections, including the old phase-zero completion notes below. Those
-sections remain historical design context; the tensor programming model is a
-separate proposal, not implemented functionality.
+This is a tensor design proposal. xmojo already runs individual Mojo kernels through [Modular's native GPU stack](modular-gpu-pipeline.md). MAX Graph is not part of that integration. Evaluate it before choosing the tensor compiler or runtime boundary.
 
 ## Historical lessons
 
@@ -195,8 +188,6 @@ environment, not a required runtime graph executor.
   an exported build;
 - implicit device movement or global device placement;
 - a user-visible graph-building API;
-- adopting MAX Graph, IREE's compiler, IREE VM, VMFB execution, or IREE tensor
-  machinery;
 - compiling arbitrary Mojo language semantics for a GPU in the first version;
 - automatically discovering the best matmul, attention, or tensor-core
   schedule from generic loops;
@@ -227,13 +218,13 @@ display is interactive UI behavior and is not inserted into exported source.
 This is the wrong lowering for an operator:
 
 ```text
-Tensor.__mul__ -> immediately load executable -> HAL dispatch
+Tensor.__mul__ -> immediately launch a device kernel
 ```
 
 Once multiplication is an opaque dispatch, a compiler cannot fuse it with an
 addition or activation. Tensor operations should remain as pure, typed
 compiler operations until fusion, kernel selection, and bufferization have
-run. HAL dispatch is emitted near the bottom of the pipeline.
+run.
 
 ### Prefer value semantics; make mutation obvious
 
@@ -392,7 +383,7 @@ executables until dependent dispatches complete.
 
 ## Compiler architecture
 
-The planned high-level path is:
+One possible lowering path keeps tensor operations visible to the compiler:
 
 ```text
 Mojo source
@@ -411,15 +402,12 @@ host program + target kernel modules
     |
     | bufferize and plan lifetimes
     v
-CPU code or accelerator artifacts + HAL dispatches
+CPU code or accelerator kernel launches
 ```
 
 ### Initial IR experiment
 
-The first implementation should attempt to use registered upstream MLIR
-`tensor`, `linalg`, `arith`, `math`, `scf`, `vector`, and related operations for
-the semantics they express naturally. xmojo already owns the compiler context,
-so it can register additional dialects and passes.
+If the tensor layer lowers directly to MLIR, start with upstream `tensor`, `linalg`, `arith`, `math`, `scf`, and `vector` operations where they express the desired semantics. xmojo can register additional dialects and passes in its compiler context.
 
 A small xmojo dialect is justified only for missing concepts such as:
 
@@ -460,28 +448,12 @@ that advertises support for that epilogue.
 
 ### CPU execution
 
-CPU is the reference backend and the quickest way to validate tensor
-semantics. Abstract tensor regions lower to ordinary Mojo loops and SIMD, then
-execute through xmojo's existing ORC engine interactively or normal native code
-when exported.
+CPU is the reference backend for tensor semantics. One option is to lower tensor regions to ordinary Mojo loops or SIMD. The same lowering can run through ORC in a notebook or through the Mojo compiler in an exported program.
 
 CPU execution must not be a separate NumPy-like interpreter with subtly
 different rules. It uses the same shape, dtype, view, mutation, and operation
 semantics as accelerators. A deliberately simple scalar lowering can serve as
 the correctness oracle before vectorized lowering is added.
-
-### Accelerator execution
-
-The accelerator compiler turns outlined target modules into a typed
-`KernelArtifact`. The runtime loads artifacts, owns device resources, and
-dispatches them. It does not optimize tensor programs.
-
-The target compiler, portable kernel subset, artifact contract, and IREE HAL
-adapter are specified in [the accelerator architecture
-document](modular-gpu-pipeline.md). The compiler-only typed ABI slice now emits
-Vulkan-style SPIR-V interfaces with storage buffers and scalar push constants;
-connecting those artifacts to Metal remains the next accelerator checkpoint.
-This document intentionally does not repeat driver-specific formats.
 
 ## Interactive execution and module export
 
@@ -603,75 +575,9 @@ traits.
 
 ## Runtime model
 
-The tensor/compiler layer depends on a small xmojo-owned native vocabulary:
+Notebook cells run host code through ORC. Exported programs use the normal Mojo build path. Both must use the same device runtime and kernel lowering. Driver-specific resource types do not appear in the public tensor API.
 
-```text
-Device
-Buffer
-Executable
-Event
-KernelArtifact
-```
-
-IREE HAL is the intended private implementation for native accelerator device,
-allocation, executable, queue, and semaphore operations. HAL types and
-driver-specific containers do not appear in the public Mojo tensor API.
-
-ORC remains the interactive host executor. An exported executable uses normal
-native Mojo host code. Both call the same runtime boundary and load the same
-kind of kernel artifacts. There is no IREE VM or second host control-flow
-system.
-
-### Installation and backend selection
-
-The intended supported-platform experience is one ordinary installation:
-
-```bash
-pip install xmojo
-xmojo
-```
-
-The Python wheel is a distribution format for the native xmojo command,
-compiler, Mojo packages, and notebook kernel; TinyMojoTorch remains a Mojo API.
-Users should not need separate Mojo, IREE, LLVM, SPIRV-Cross, Metal, Vulkan,
-CUDA, or ROCm development toolchains.
-
-The first platform artifacts should contain only useful native drivers:
-
-```text
-Apple Silicon macOS   Metal
-Linux                 Vulkan on AMD and NVIDIA
-```
-
-Vulkan provides one portable Linux baseline rather than requiring separate
-framework installations for each vendor. It still requires the ordinary AMD
-or NVIDIA system GPU driver, just as accelerator frameworks cannot replace a
-working kernel driver. Metal is supplied by macOS.
-
-Hardware is selected at runtime rather than installation time:
-
-```mojo
-var device = Device.open("auto")
-var amd_or_nvidia = Device.open("vulkan:0")
-var mac = Device.open("metal:0")
-```
-
-`auto` follows a documented preference order over available backends. Explicit
-selectors remain stable within a process, buffers belong to one selected
-device, and incompatible-device operations fail rather than copying silently.
-The Jupyter kernel retains the selected default device and its resources for
-the session.
-
-Later native compiler/runtime paths can add PTX or cubin through IREE CUDA and
-HSACO through IREE HIP or AMDGPU. If their linked size and system dependencies
-remain reasonable they can live in the relevant platform wheel. Otherwise,
-small backend wheels can register themselves with the same runtime discovery
-layer. Neither arrangement changes tensor programs or the device API.
-
-This is a packaging goal, not a current support claim. The Metal story is the
-first implementation. AMD and NVIDIA support becomes releasable only when the
-same compile, persistent-buffer, asynchronous-dispatch, and exact-readback
-narrative runs on real hardware in CI or equivalent test machines.
+See [Native Modular GPU integration](modular-gpu-pipeline.md) for xmojo's GPU platform requirements and what has been verified.
 
 ## Performance philosophy
 
@@ -757,20 +663,6 @@ Each phase ends in a readable, executable vertical slice. Later phases may
 change earlier internal APIs; preserving experimental compatibility is not a
 goal.
 
-### Phase 0: establish the native runtime boundary
-
-The Metal runtime and compiler-only SPIR-V portions of this phase are complete.
-The IREE HAL runtime-only experiment and xmojo-owned
-`Device`/`Buffer`/`Executable`/`Event`/`KernelArtifact` boundary described in
-the accelerator architecture document now cover device selection, byte-range
-buffer views, opaque push constants, asynchronous dispatch, executable
-replacement, and measured packaging and lifetime behavior. Vulkan and
-discrete-device memory behavior remain later hardware-backed extensions of the
-same boundary. Separately, the registered xmojo compiler target validates a
-typed Mojo kernel ABI and emits Vulkan compute SPIR-V. The remaining phase-zero
-join is SPIR-V-to-MSL translation and loading that result through the existing
-Metal runtime boundary.
-
 ### Phase 1: a CPU tensor semantic slice
 
 Implement the smallest compiler-visible tensor value supporting:
@@ -817,16 +709,9 @@ Add only the transformations required by the narrative:
 Compilation time is measured from this phase onward. A rewrite system that is
 pleasant but slow is not considered successful.
 
-### Phase 4: first open accelerator vertical slice
+### Phase 4: first accelerator tensor example
 
-Connect one outlined tensor region to the portable target and runtime path in
-the accelerator document. Run the same semantic story on CPU and Metal through
-IREE HAL, then add Vulkan without changing the public tensor code.
-
-This phase proves typed buffer ABI formation, artifact packaging, persistent
-device tensors across notebook cells, display/readback, and exported native
-execution. It should not broaden the portable kernel language beyond what the
-story needs.
+Run the same small tensor computation on CPU and a supported GPU. Verify that a device tensor survives across notebook cells, can be displayed or read back, and gives the same result from the exported module.
 
 ### Phase 5: useful numerical kernels
 
@@ -853,18 +738,7 @@ complete training stories.
 
 ### Phase 7: packaging and ecosystem
 
-Separate the tensor package from xmojo where doing so produces a cleaner
-ordinary-Mojo dependency. Publish self-contained PyPI platform wheels with
-Metal on Apple Silicon and a Vulkan baseline on Linux for AMD and NVIDIA.
-Include native CUDA or AMD backends in platform wheels when practical, or as
-automatically discovered backend wheels when their size or system dependencies
-justify separation. Keep xmojo as the reference interactive environment,
-notebook exporter, and compiler distribution.
-
-Broader backend work follows the accelerator document and measured need. The
-public tensor and runtime APIs must not encode IREE, Metal, Vulkan, CUDA, or HIP
-implementation details. Release claims require the complete narrative on real
-hardware for every advertised backend.
+Separate the tensor package from xmojo where doing so makes it easier to use from ordinary Mojo. Keep xmojo as the reference interactive environment, notebook exporter, and compiler distribution. Verify the complete tensor story on real hardware before claiming support for a GPU backend.
 
 ## Early decision tests
 
@@ -876,8 +750,7 @@ Several questions should be answered by code rather than prolonged design:
    views optimizable without creating a parallel runtime graph?
 3. Can an abstract tensor cross ordinary Mojo helper functions without early
    allocation or opaque dispatch?
-4. Where is the clean typed boundary between abstract tensor values and owned
-   HAL buffers?
+4. Where is the typed boundary between abstract tensor values and owned device buffers?
 5. Does exported cell concatenation produce useful whole-function IR without
    surprising scope or lifetime changes?
 6. What compiler effects are required to preserve mutation, randomness,

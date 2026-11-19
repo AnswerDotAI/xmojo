@@ -29,9 +29,12 @@ xeus_deps_root="$output_user_root/xmojo-xeus-deps"
 startup_args=("--output_user_root=$output_user_root")
 action_args=()
 if [[ -n "${BBUDDY_API_KEY:-}" ]]; then
+  # Modular skips its public cache headers when a private token is set.
+  export BUILDBUDDY_TOKEN="${BUILDBUDDY_TOKEN:-$BBUDDY_API_KEY}"
   action_args+=(
     "--bes_backend=grpcs://remote.buildbuddy.io"
     "--bes_results_url=https://app.buildbuddy.io/invocation/"
+    "--bes_header=x-buildbuddy-api-key=$BBUDDY_API_KEY"
     "--remote_cache=grpcs://remote.buildbuddy.io"
     "--remote_header=x-buildbuddy-api-key=$BBUDDY_API_KEY"
     "--remote_instance_name=xmojo"

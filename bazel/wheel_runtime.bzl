@@ -1,5 +1,7 @@
 """Stage the frontend's shared-library dependency graph in the wheel."""
 
+load("@//bazel/internal:modular_strip_binary.bzl", "register_strip_action")
+load("@bazel_tools//tools/cpp:toolchain_utils.bzl", "use_cpp_toolchain")
 load("@rules_cc//cc/common:cc_shared_library_info.bzl", "CcSharedLibraryInfo")
 
 def _wheel_runtime_impl(ctx):
@@ -21,7 +23,7 @@ def _wheel_runtime_impl(ctx):
     outputs = []
     for name, library in sorted(libraries.items()):
         output = ctx.actions.declare_file("python/xmojo/lib/" + name)
-        ctx.actions.symlink(output = output, target_file = library)
+        register_strip_action(ctx = ctx, input_file = library, output_file = output)
         outputs.append(output)
     if not outputs:
         fail("No native runtime libraries found")
@@ -30,4 +32,6 @@ def _wheel_runtime_impl(ctx):
 wheel_runtime = rule(
     implementation = _wheel_runtime_impl,
     attrs = {"deps": attr.label_list(mandatory = True, providers = [CcSharedLibraryInfo])},
+    toolchains = use_cpp_toolchain(),
+    fragments = ["cpp"],
 )

@@ -88,14 +88,12 @@ representation; other values receive a type-name fallback.
 - Interrupting a running cell is not yet supported.
 - Rich display currently supports textual MIME data, without binary buffers, display metadata, or transient display IDs.
 - Persistent variables cannot be redeclared or implicitly captured by functions defined in other cells.
-- GPU support is opt-in and currently targets top-level noncapturing kernels.
 
 ## GPU support
 
-The REPL and Jupyter kernel use Modular's native GPU compiler and runtime.
-Use the normal `max.gpu` APIs in either frontend; no GPU-specific launch flag,
-separate Mojo compiler, or `max-core` Python installation is needed. The session
-detects the local accelerator. `--target-accelerator` overrides that choice.
+The REPL and Jupyter kernel compile and run Mojo kernels in-process with Modular's native GPU stack. Use `max.gpu` without a separate Mojo or `max-core` installation or a GPU launch flag. xmojo does not integrate MAX Graph.
+
+The session detects the local accelerator. `--target-accelerator` overrides that choice.
 
 On Apple Silicon, install Xcode's optional Metal toolchain once:
 
@@ -125,11 +123,7 @@ with DeviceContext() as context:
         print(values[0])  # 2.0
 ```
 
-Imports, kernel definitions, and owned device contexts and buffers can persist
-across cells. GPU compilation and launch use the same in-process pipeline as
-ordinary Mojo code. Hardware support and platform prerequisites follow the
-pinned Modular revision. See [the GPU integration notes](docs/modular-gpu-pipeline.md)
-for the compiler boundary and GPU tests.
+Imports, kernel definitions, and owned device contexts and buffers can persist across cells. See the [GPU integration notes](docs/modular-gpu-pipeline.md) for platform requirements and tested configurations.
 
 ## REPL
 
@@ -166,8 +160,7 @@ persisting them.
 
 ## Build executables
 
-`xmojo build` uses Modular's native Mojo build driver with an ordinary stdlib,
-so compiled programs retain normal standalone I/O behavior:
+`xmojo build` uses the system C compiler and linker. It uses the ordinary Mojo standard library for standalone I/O.
 
 `hello.mojo`:
 
