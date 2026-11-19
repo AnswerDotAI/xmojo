@@ -25,7 +25,7 @@ else
   default_output_user_root="${XDG_CACHE_HOME:-$HOME/.cache}/bazel/xmojo-user-root-1"
 fi
 output_user_root="${XMOJO_BAZEL_OUTPUT_USER_ROOT:-$default_output_user_root}"
-xeus_deps_root="$output_user_root/xmojo-xeus-deps"
+kernel_root="$output_user_root/xmojo-kernel"
 startup_args=("--output_user_root=$output_user_root")
 action_args=()
 if [[ -n "${BBUDDY_API_KEY:-}" ]]; then
@@ -86,23 +86,17 @@ shift
 case "$command" in
 aquery | build | cquery | run | test)
   uses_xmojo=0
-  needs_xeus=0
   for target in "$@"; do
     case "$target" in
     *@xmojo//*)
       uses_xmojo=1
-      needs_xeus=1
       ;;
     esac
   done
   repository_args=("--inject_repository=xmojo=$script_root")
   if (( uses_xmojo )); then
-    if (( needs_xeus )); then
-      "$script_root/tools/build_xeus_deps.sh" "$xeus_deps_root" "$output_user_root"
-    else
-      "$script_root/tools/build_xeus_deps.sh" "$xeus_deps_root" "$output_user_root" prepare
-    fi
-    repository_args+=("--inject_repository=xmojo_deps=$xeus_deps_root/install")
+    "$script_root/tools/build_kernel.sh" "$kernel_root"
+    repository_args+=("--inject_repository=xmojo_kernel=$kernel_root/install")
   fi
   exec "$modular_root/bazelw" "${startup_args[@]}" "$command" \
     "${action_args[@]}" \

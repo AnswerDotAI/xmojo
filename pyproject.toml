@@ -4,12 +4,15 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "xmojo"
-version = "0.0.2026111706"
+version = "0.0.2026111705.post1"
 description = "Interactive Mojo environment using Modular's ORC execution engine"
 readme = "README.md"
 requires-python = ">=3.9"
 license = "Apache-2.0 WITH LLVM-exception"
 license-files = ["LICENSE"]
+
+[project.optional-dependencies]
+dev = ["conkernelclient", "rustygate", "jupyasyncclient"]
 
 [project.scripts]
 xmojo = "xmojo._cli:xmojo"
@@ -31,14 +34,20 @@ cache-keys = [
   {file = "pyproject.toml"},
   {file = "setup.py"},
   {file = "BUILD.bazel"},
+  {file = "bazelw"},
   {file = "bazel/**/*.bzl"},
-  {file = "cmake/**/*"},
+  {file = "bazel/kernel/*.bazel"},
+  {file = "kernel/Cargo.toml"},
+  {file = "kernel/Cargo.lock"},
+  {file = "kernel/src/**/*.rs"},
   {file = "include/**/*.h"},
   {file = "mojo/**/*.mojo"},
   {file = "python/**/*.py"},
   {file = "share/**/*"},
   {file = "src/**/*.cpp"},
   {file = "src/**/*.h"},
+  {file = "tools/build_kernel.sh"},
+  {file = "tools/rust_licenses.py"},
   {env = "XMOJO_BAZEL_WRAPPER"},
   {env = "XMOJO_DEPS_ROOT"},
   {env = "XMOJO_MODULAR_ROOT"},

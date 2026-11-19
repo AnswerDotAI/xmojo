@@ -16,14 +16,21 @@ InteractiveSession
 │   └── completion, inspection, and completeness tooling
 ├── ORC object compilation and execution
 ├── xmojo Mojo package and scoped output/display callbacks
-└── unified xmojo REPL, compiler-driver, and xeus-zmq kernel frontend
+└── xmojo REPL, compiler-driver, and Rust/kernmini kernel frontend
 ```
 
 GPU compilation and execution use Modular's native compiler targets and MAX
 runtime. xmojo owns the interactive session and frontend integration; Modular
 owns device discovery, specialization, code generation, allocation, and launch.
-The public session boundary is direct C++. Generated code uses the native
-CompilerRT and MAX runtime entry points.
+The session has a direct C++ API and a C ABI in `include/xmojo/SessionC.h` for
+foreign-language frontends. Build the latter with
+`./bazelw build @xmojo//:session_c_shared`; it produces `libxmojo_session.dylib`
+on macOS or `libxmojo_session.so` on Linux, using the same shared compiler and
+runtime dependencies as the native frontend. Its opaque session stays on its
+creating OS thread. Callback data is borrowed only until the callback returns;
+the header documents ownership and error handling. The bridge owns no Jupyter
+protocol or scheduling policy. Generated code uses the native CompilerRT and
+MAX runtime entry points.
 
 Modular remains Bazel's main repository because its dependency overrides are
 root-module configuration. The local `bazelw` injects this worktree as the
@@ -34,12 +41,13 @@ is intentional. The dependency list remains explicit in `BUILD.bazel`.
 
 ## Development layout
 
-Development uses editable sibling worktrees for Modular, nlohmann-json, xeus,
-xeus-zmq, libzmq, and cppzmq. `XMOJO_DEPS_ROOT` selects their parent directory
-and defaults to xmojo's parent. `XMOJO_MODULAR_ROOT` can select a separate Modular
-checkout. No dependency needs an xmojo patch.
+Development uses an editable sibling Modular worktree. `XMOJO_DEPS_ROOT`
+selects its parent directory and defaults to xmojo's parent.
+`XMOJO_MODULAR_ROOT` can select a separate Modular checkout. No dependency
+needs an xmojo patch. Cargo resolves the kernel's Rust dependencies from
+`kernel/Cargo.toml` and `kernel/Cargo.lock`.
 
-Install `uv`, CMake, and Ninja. macOS development needs Xcode and GPU execution
+Install `uv`, Rust, CMake, and Ninja. macOS development needs Xcode and GPU execution
 needs its Metal toolchain. Ubuntu/Debian development needs `cmake`, `ninja-build`,
 and `pkg-config`. Native builds target Apple Silicon macOS and Linux on ARM64
 or x86-64; GPU execution additionally requires hardware supported by Modular.
@@ -59,8 +67,8 @@ remain visible; rerun `uv sync` after native, Mojo, or build configuration chang
 Run the core stories and, on a GPU host, the hardware stories:
 
 ```bash
-./bazelw test @xmojo//:session_test @xmojo//:interpreter_test \
-  @xmojo//:cli_test @xmojo//:kernel_test --test_output=errors
+./bazelw test @xmojo//:session_test @xmojo//:cli_test \
+  @xmojo//:kernel_test --test_output=errors
 ./bazelw test @xmojo//:gpu_test @xmojo//:gpu_kernel_test --test_output=errors
 ```
 
@@ -75,17 +83,22 @@ when `CODEX_SANDBOX` is set. Configure
 than through `bash`. This prevents a sandboxed Bazel server from being reused
 by later commands.
 
-CMake materializes Modular's BoringSSL headers and stages the xeus libraries
-when Bazel first needs them. On Linux it uses Modular's pinned Clang and Ubuntu
-22.04 sysroot to match the final Bazel link. On macOS it uses the SDK belonging
-to the selected Xcode. xmojo's UUID implementation uses BoringSSL randomness,
-so the host distribution's `libuuid` cannot leak across that boundary.
+The wrapper builds the Rust kernel as a static library with Cargo and injects
+it as `@xmojo_kernel` before Bazel links the executable. Cargo's release build
+is reused for development and optimized wheels; its own dependency tracking
+rebuilds changed Rust sources. Jupyter transport and authentication are pure
+Rust, so the kernel needs no separate ZeroMQ or crypto libraries.
+
+Cargo honors machine-local source overrides during development. Clean release
+environments resolve the published dependencies from the manifest and lockfile.
 
 ## Interactive compiler PoC
 
 Cell compilation uses xmojo's own module construction and persistent-value ABI.
-Completion and inspection use Modular's `MojoREPLContext` as a tooling helper;
-it does not execute cells or materialize their variables. The parser borrows
+Completion and inspection use Modular's `MojoREPLContext` as a parsing helper;
+`InteractiveSession` remains the execution owner. Before initialization, xmojo
+sets `MOJO_REPL_COMPLETION_CACHE_LIMIT=1` so each query refreshes the SDK cache
+while its borrowed query buffer is still alive. The parser borrows
 three language-independent ideas from Modular's REPL, with source attribution:
 
 - partition cell source into module declarations and executable statements;
@@ -158,7 +171,7 @@ xmojo publishes platform wheels only; it does not publish a source
 distribution. The wheel tags are `macosx_12_0_arm64`,
 `manylinux_2_35_aarch64`, and `manylinux_2_35_x86_64`.
 
-Each platform wheel packages the native frontend, its shared-library dependencies, the ordinary and interactive-overlay `std` packages, `max.mojoc`, and `xmojo.mojoc`. It includes Modular's license and third-party notices.
+Each platform wheel packages the native frontend, its shared-library dependencies, the ordinary and interactive-overlay `std` packages, `max.mojoc`, and `xmojo.mojoc`. It includes Modular's license and third-party notices, resolved Cargo dependency notices, and the Rust standard library's licenses and copyright notices.
 
 The Python launcher sets `MODULAR_MOJO_MAX_PACKAGE_ROOT` to the installed `_native` directory and replaces itself with the native frontend. Modular resolves CompilerRT and standalone linker flags from that package root. The frontend in `bin/` finds shared libraries in `lib/` through relative rpaths. The launcher does not change `LD_LIBRARY_PATH` or `DYLD_LIBRARY_PATH`.
 
@@ -218,24 +231,41 @@ See the [GPU integration notes](docs/modular-gpu-pipeline.md) for platform requi
 
 ## Jupyter frontend
 
-`MojoInterpreter` is a thin translation layer between xeus requests and
-`InteractiveSession`; it owns no compiler state. The `xmojo` executable adds
-xeus-zmq's sockets and Jupyter connection-file handling. Its end-to-end test
+The Rust frontend in `kernel/` translates `LanguageSession` calls to the C ABI.
+`ThreadWorker` creates, uses, and destroys the native session on one OS thread;
+kernmini owns sockets, Jupyter messages, execution scheduling, and AI holds.
+The C++ executable passes session options and its version to the static Rust
+entry point. Live native outputs are published in order, including a final
+expression's `execute_result`; the execution reply does not duplicate it.
+`inspect_request` returns declaration documentation in `text/markdown` and
+compiler signature help in `application/json`, using Monaco's `SignatureHelp`
+shape. Parameter ranges are UTF-16 label offsets; request cursors use Jupyter
+character positions. Compiler signature help requires balanced delimiters,
+as in Monaco's auto-closed call buffers. `detail_level=1` includes retained user-declaration
+source. Standalone `?` and `??` queries use that same native inspection path
+and display both Markdown and plain text for notebook and terminal clients.
+The end-to-end test
 launches that executable directly by argv through `conkernelclient`, without
 installing or discovering a kernelspec. `conkernelclient` provides correlated
 shell replies, deterministic readiness, IOPub draining, and process cleanup.
 The test checks persistent cells, tooling requests, automatic and explicit
 display, stdout, stderr, and errors over the wire.
 
-The xeus, xeus-zmq, libzmq, cppzmq, and nlohmann-json sibling worktrees remain
-unchanged. CMake stages their static libraries under the active Bazel
-output-user root, and the wrapper injects that install tree as the logical
-`@xmojo_deps` repository. This gives concurrent wrappers independent CMake
-build and install trees while retaining Bazel disk-cache reuse for identical
-consumer actions. xeus-zmq normally uses OpenSSL algorithms which Modular's
-BoringSSL does not provide. Rather than linking two crypto implementations, the
-build substitutes an xmojo-owned authentication implementation supporting the
-Jupyter defaults: `none` and `hmac-sha256`. Other schemes fail explicitly.
+The optional `dev` dependencies also support the manual gateway story:
+
+```bash
+uv pip install --offline --no-deps -e .
+jupyter kernelspec install --sys-prefix --replace share/jupyter/kernels/xmojo
+python tests/gateway_test.py
+```
+
+The first two commands refresh the editable native package and register its
+kernelspec after source or kernelspec changes. The story starts its own
+temporary Rustygate and discovers the installed `xmojo` kernel by name,
+executes saved cells, observes live output from an infinite native loop, and
+sends Solveit's websocket Stop request. The kernel keeps its ID and notebook
+binding, but restarts with a new process and loses native state. Rustygate must
+be rebuilt with support for the `interrupt requires restart` capability first.
 
 ## Design constraints
 
@@ -255,12 +285,12 @@ Jupyter defaults: `none` and `hmac-sha256`. Other schemes fail explicitly.
 - Local sibling worktrees are authoritative during development. CI may check
   out recorded known-good commits for reproduction.
 
-By default the wrapper finds Modular and the CMake dependencies under
+By default the wrapper finds Modular under
 `XMOJO_DEPS_ROOT`, which defaults to xmojo's parent directory.
 `XMOJO_MODULAR_ROOT` overrides just the Modular checkout. `bazelw` and
 `bazelw2` use separate output-user roots. Bazel then derives a distinct output
 base for each selected Modular worktree, giving concurrent sessions and release
-trees independent servers, analysis caches, and staged xeus dependencies. Both
+trees independent servers, analysis caches, and staged Rust archives. Both
 inherit Modular's shared disk cache, so identical actions reuse compiled
 outputs.
 `XMOJO_BAZEL_OUTPUT_USER_ROOT` and `XMOJO_BAZELW2_OUTPUT_USER_ROOT` override the

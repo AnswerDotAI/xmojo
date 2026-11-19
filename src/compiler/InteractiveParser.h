@@ -68,7 +68,8 @@ public:
   void activateVariables(const Cell &cell);
 
   CompletionResult complete(llvm::StringRef source, size_t cursorPosition);
-  InspectionResult inspect(llvm::StringRef source, size_t cursorPosition);
+  InspectionResult inspect(llvm::StringRef source, size_t cursorPosition,
+                           unsigned detailLevel);
   CompletenessResult isComplete(llvm::StringRef source);
 
   llvm::SourceMgr &getSourceManager();

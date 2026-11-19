@@ -33,8 +33,3 @@ clone_revision() {
 
 mkdir -p "$deps_root"
 clone_revision modular https://github.com/modular/modular.git "$MODULAR_REVISION"
-clone_revision nlohmann-json https://github.com/nlohmann/json.git "$NLOHMANN_JSON_REVISION"
-clone_revision xeus https://github.com/jupyter-xeus/xeus.git "$XEUS_REVISION"
-clone_revision xeus-zmq https://github.com/jupyter-xeus/xeus-zmq.git "$XEUS_ZMQ_REVISION"
-clone_revision libzmq https://github.com/zeromq/libzmq.git "$LIBZMQ_REVISION"
-clone_revision cppzmq https://github.com/zeromq/cppzmq.git "$CPPZMQ_REVISION"

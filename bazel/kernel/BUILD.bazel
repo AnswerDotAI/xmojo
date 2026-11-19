@@ -1,0 +1,13 @@
+load("@rules_cc//cc:cc_import.bzl", "cc_import")
+
+exports_files(["Rust-ThirdPartyNotices.txt", "Rust-COPYRIGHT-library.html"])
+
+cc_import(
+    name = "kernel",
+    static_library = "libxmojo_kernel.a",
+    visibility = ["//visibility:public"],
+    linkopts = select({
+        "@platforms//os:macos": ["-liconv"],
+        "//conditions:default": ["-ldl", "-lpthread", "-lm", "-lrt", "-lutil"],
+    }),
+)

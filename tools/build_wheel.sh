@@ -30,11 +30,6 @@ case "$(uname -s):$(uname -m)" in
 esac
 
 check_repo modular "$modular_root" "$MODULAR_REVISION"
-check_repo nlohmann-json "$deps_root/nlohmann-json" "$NLOHMANN_JSON_REVISION"
-check_repo xeus "$deps_root/xeus" "$XEUS_REVISION"
-check_repo xeus-zmq "$deps_root/xeus-zmq" "$XEUS_ZMQ_REVISION"
-check_repo libzmq "$deps_root/libzmq" "$LIBZMQ_REVISION"
-check_repo cppzmq "$deps_root/cppzmq" "$CPPZMQ_REVISION"
 if [[ "${XMOJO_ALLOW_DIRTY:-0}" != "1" ]]; then check_repo xmojo "$root"; fi
 
 grep -Fqx "version = \"${XMOJO_VERSION}\"" "$root/pyproject.toml" || {

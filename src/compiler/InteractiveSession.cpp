@@ -32,12 +32,14 @@
 #include "llvm/ExecutionEngine/Orc/AbsoluteSymbols.h"
 #include "llvm/ExecutionEngine/Orc/ExecutionUtils.h"
 #include "llvm/IR/Mangler.h"
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/Support/CrashRecoveryContext.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/TargetSelect.h"
 
 #include <cerrno>
+#include <cstdlib>
 #include <cstdint>
 #include <mutex>
 #include <optional>
@@ -49,6 +51,41 @@ using namespace mlir;
 using namespace xmojo;
 
 namespace {
+
+struct HelpQuery {
+  StringRef name;
+  unsigned detailLevel;
+};
+
+std::optional<HelpQuery> helpQuery(StringRef source) {
+  source = source.trim();
+  if (source.contains('\n') || source.contains('\r'))
+    return std::nullopt;
+  unsigned detailLevel;
+  if (source.consume_front("??") || source.consume_back("??"))
+    detailLevel = 1;
+  else if (source.consume_front("?") || source.consume_back("?"))
+    detailLevel = 0;
+  else
+    return std::nullopt;
+  source = source.trim();
+  if (source.empty() || source.contains('?'))
+    return std::nullopt;
+  bool first = true;
+  for (unsigned char character : source) {
+    if (character == '.' && !first) {
+      first = true;
+      continue;
+    }
+    if (!(llvm::isAlpha(character) || character == '_' ||
+          (!first && (llvm::isDigit(character) || character == '$'))))
+      return std::nullopt;
+    first = false;
+  }
+  if (first)
+    return std::nullopt;
+  return HelpQuery{source, detailLevel};
+}
 
 thread_local OutputCallback *activeOutput = nullptr;
 thread_local DisplayCallback *activeDisplay = nullptr;
@@ -184,6 +221,10 @@ void initializeTargets() {
 class InteractiveSession::Impl {
 public:
   static ErrorOr<std::unique_ptr<Impl>> create(SessionOptions options) {
+    // The SDK borrows temporary query buffers. Rebuild its tooling cache
+    // before each request until upstream owns those buffers.
+    if (setenv("MOJO_REPL_COMPLETION_CACHE_LIMIT", "1", 1) != 0)
+      return Error("could not configure fresh Mojo tooling contexts");
     initializeTargets();
 
     ErrorOr<ContextRef> runtimeContextOr = Init::getOrCreateContext(
@@ -206,6 +247,24 @@ public:
     if (!usable)
       return Error("interactive session is unusable after a native JIT "
                    "failure; restart it");
+
+    if (auto query = helpQuery(source)) {
+      InspectionResult help = interactiveParser->inspect(
+          query->name, query->name.size(), query->detailLevel);
+      if (help.markdown.empty())
+        help.markdown = "No documentation found for `" + query->name.str() +
+                        "`.\n";
+      RuntimeCallbackScope callbackScope(options);
+      xmojo_display_begin(0);
+      xmojo_display_add("text/markdown", 13, help.markdown.data(),
+                        help.markdown.size());
+      xmojo_display_add("text/plain", 10, help.markdown.data(),
+                        help.markdown.size());
+      xmojo_display_end();
+      ExecutionResult result;
+      result.succeeded = true;
+      return result;
+    }
 
     ExecutionResult result;
 
@@ -345,11 +404,14 @@ public:
     return interactiveParser->complete(source, cursorPosition);
   }
 
-  InspectionResult inspect(StringRef source, size_t cursorPosition) {
-    return interactiveParser->inspect(source, cursorPosition);
+  InspectionResult inspect(StringRef source, size_t cursorPosition,
+                           unsigned detailLevel) {
+    return interactiveParser->inspect(source, cursorPosition, detailLevel);
   }
 
   CompletenessResult isComplete(StringRef source) {
+    if (helpQuery(source))
+      return {};
     return interactiveParser->isComplete(source);
   }
 
@@ -529,8 +591,9 @@ CompletionResult InteractiveSession::complete(StringRef source,
 }
 
 InspectionResult InteractiveSession::inspect(StringRef source,
-                                             size_t cursorPosition) {
-  return impl->inspect(source, cursorPosition);
+                                             size_t cursorPosition,
+                                             unsigned detailLevel) {
+  return impl->inspect(source, cursorPosition, detailLevel);
 }
 
 CompletenessResult InteractiveSession::isComplete(StringRef source) {

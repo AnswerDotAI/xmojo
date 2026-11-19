@@ -51,13 +51,18 @@ The kernel provides:
 - exact streaming of `stdout` and `stderr`;
 - automatic display of a cell's final expression;
 - explicit rich display with textual MIME bundles;
-- compiler-backed completion, inspection, and input completeness;
+- compiler-backed completion, inspection, signature help, and input completeness;
 - source-mapped compiler diagnostics and Mojo runtime stack traces; and
 - continued use of the session after ordinary compilation or runtime errors.
 
 Compilation failures execute nothing and add no names. Mutations completed
 before a runtime error remain visible, while new variables from the raising
 cell are not persisted.
+
+Use `?name` or `name?` to show documentation. `??name` or `name??` also shows
+the retained source of a user-defined declaration. These work in notebook
+cells and the REPL. Signature help includes generic parameters and highlights
+the active call argument.
 
 ### Rich display
 
@@ -85,7 +90,7 @@ representation; other values receive a type-name fallback.
 
 ### Limitations
 
-- Interrupting a running cell is not yet supported.
+- Native Mojo has no state-preserving interrupt. In Solveit, Stop restarts the kernel and discards live variables.
 - Rich display currently supports textual MIME data, without binary buffers, display metadata, or transient display IDs.
 - Persistent variables cannot be redeclared or implicitly captured by functions defined in other cells.
 

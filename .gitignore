@@ -10,4 +10,5 @@ __pycache__/
 /python/xmojo/_native/
 /python/xmojo.egg-info/
 /tags
+/kernel/target/
 meta/

@@ -81,9 +81,29 @@ struct CompletionResult {
   size_t cursorEnd = 0;
 };
 
+struct SignatureParameter {
+  /// UTF-8 byte offsets into the complete signature label.
+  size_t labelStart;
+  size_t labelEnd;
+  std::string documentation;
+};
+
+struct Signature {
+  std::string label;
+  std::string documentation;
+  std::vector<SignatureParameter> parameters;
+};
+
+struct SignatureHelp {
+  std::vector<Signature> signatures;
+  size_t activeSignature = 0;
+  size_t activeParameter = 0;
+};
+
 struct InspectionResult {
   bool found = false;
   std::string markdown;
+  SignatureHelp signatureHelp = {};
 };
 
 enum class CompletenessStatus { Complete, Incomplete, Invalid };
@@ -119,7 +139,8 @@ public:
 
   M::ErrorOr<ExecutionResult> execute(llvm::StringRef source);
   CompletionResult complete(llvm::StringRef source, size_t cursorPosition);
-  InspectionResult inspect(llvm::StringRef source, size_t cursorPosition);
+  InspectionResult inspect(llvm::StringRef source, size_t cursorPosition,
+                           unsigned detailLevel = 0);
   CompletenessResult isComplete(llvm::StringRef source);
 
 private:

@@ -2,6 +2,7 @@
   "argv": ["xmojo", "kernel", "-f", "{connection_file}"],
   "display_name": "Mojo (xmojo)",
   "language": "mojo",
+  "interrupt_mode": "message",
   "metadata": {
     "debugger": false
   }

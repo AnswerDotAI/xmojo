@@ -22,6 +22,9 @@ class CLIStory(unittest.TestCase):
         result = self.run_ok(xmojo, "-e", 'print("interactive")')
         self.assertEqual(result.stdout, "interactive\n")
 
+        result = self.run_ok(xmojo, "-e", "?Int")
+        self.assertTrue(result.stdout)
+
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             source, executable = root / "hello.mojo", root / "hello"

@@ -366,6 +366,9 @@ print(x, y, owned, multiline)
   EXPECT_NE(variableInspection.markdown.find("var owned: String"),
             std::string::npos);
 
+  auto signature = session->inspect("add(1, )", 7);
+  EXPECT_FALSE(signature.signatureHelp.signatures.empty());
+
   auto persistentMemberInspection = session->inspect("owned.byte_length()", 10);
   ASSERT_TRUE(persistentMemberInspection.found);
   EXPECT_NE(persistentMemberInspection.markdown.find("byte_length"),

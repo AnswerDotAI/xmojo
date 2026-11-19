@@ -1,0 +1,3 @@
+"""The Rust kernel archive built by Cargo."""
+
+repo(default_package_metadata = [])

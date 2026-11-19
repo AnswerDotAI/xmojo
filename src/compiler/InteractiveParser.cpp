@@ -794,11 +794,36 @@ public:
 
   InspectionResult
   inspect(StringRef source, size_t cursorPosition,
-          ArrayRef<xmojo::InteractiveParser::PersistentVar> variables) {
-    InspectionResult result;
+          ArrayRef<xmojo::InteractiveParser::PersistentVar> variables,
+          unsigned detailLevel) {
     if (cursorPosition > source.size())
-      return result;
+      return {};
+    InspectionResult result =
+        inspectDeclaration(source, cursorPosition, variables, detailLevel);
+    auto types = variableTypes(variables);
+    if (auto help =
+            replContext->signatureHelp(source, cursorPosition, types, nullptr)) {
+      result.signatureHelp.activeSignature = help->activeSignature;
+      result.signatureHelp.activeParameter = help->activeParameter;
+      for (const auto &signature : help->signatures) {
+        xmojo::Signature copied{signature.label, signature.documentation, {}};
+        for (const auto &parameter : signature.parameters)
+          copied.parameters.push_back({parameter.labelOffset.first,
+                                        parameter.labelOffset.second,
+                                        parameter.documentation});
+        result.signatureHelp.signatures.push_back(std::move(copied));
+      }
+      result.found = true;
+    }
+    return result;
+  }
 
+private:
+  InspectionResult
+  inspectDeclaration(StringRef source, size_t cursorPosition,
+                     ArrayRef<xmojo::InteractiveParser::PersistentVar> variables,
+                     unsigned detailLevel) {
+    InspectionResult result;
     references.references.clear();
     references.collecting = true;
     unsigned id = sourceManager.AddNewSourceBuffer(
@@ -826,6 +851,12 @@ public:
           result.markdown += "\n---\n\n";
         result.markdown +=
             M::KGEN::LIT::getDeclFullMarkdownString(*declaration);
+        if (detailLevel) {
+          std::string definition = declarationSource(*declaration);
+          if (!definition.empty())
+            result.markdown += "\n\n### Source\n\n```mojo\n" + definition +
+                               "\n```\n";
+        }
       }
       result.found = !result.markdown.empty();
       if (result.found)
@@ -835,7 +866,47 @@ public:
     return inspectPersistent(source, cursorPosition, variables);
   }
 
-private:
+  std::string declarationSource(ASTDecl &declaration) {
+    LexerCursor start = declaration.getDeclStartCursor();
+    if (start.isInvalid() || !declaration.getEndCursorState())
+      return {};
+
+    Lexer lexer(declaration.getShared().diags, start);
+    llvm::SMLoc lastEnd = start.getToken().getLoc();
+    while (!lexer.getToken().is(Token::eof) &&
+           !declaration.isMatchingEndCursor(lexer.getCursor())) {
+      lastEnd = lexer.getToken().getLocRange().End;
+      lexer.lexToken();
+    }
+    llvm::SMRange range{start.getToken().getLoc(), lexer.getToken().getLoc()};
+    auto &mapper = replContext->getLocMapper();
+    llvm::SMLoc mappedStart = mapper.mapLocation(range.Start);
+    if (mappedStart.isValid()) {
+      // The next token may be a generated wrapper, with no source mapping.
+      // Map the last byte of the declaration instead of that next token.
+      if (lastEnd.getPointer() <= start.getToken().getLoc().getPointer())
+        return {};
+      llvm::SMLoc mappedLast = mapper.mapLocation(
+          llvm::SMLoc::getFromPointer(lastEnd.getPointer() - 1));
+      if (!mappedLast.isValid())
+        return {};
+      range = {mappedStart,
+               llvm::SMLoc::getFromPointer(mappedLast.getPointer() + 1)};
+    }
+    auto &manager = declaration.getShared().getSourceMgr();
+    if (!range.isValid())
+      return {};
+    unsigned bufferID = manager.FindBufferContainingLoc(range.Start);
+    if (!bufferID ||
+        manager.FindBufferContainingLoc(range.End) != bufferID ||
+        range.End.getPointer() < range.Start.getPointer())
+      return {};
+    return StringRef(range.Start.getPointer(),
+                     range.End.getPointer() - range.Start.getPointer())
+        .rtrim()
+        .str();
+  }
+
   static SmallVector<std::pair<StringRef, mlir::Type>>
   variableTypes(ArrayRef<xmojo::InteractiveParser::PersistentVar> variables) {
     SmallVector<std::pair<StringRef, mlir::Type>> result;
@@ -1023,8 +1094,9 @@ public:
     return result;
   }
 
-  InspectionResult inspect(StringRef source, size_t cursorPosition) {
-    return tooling->inspect(source, cursorPosition, persistentVars);
+  InspectionResult inspect(StringRef source, size_t cursorPosition,
+                           unsigned detailLevel) {
+    return tooling->inspect(source, cursorPosition, persistentVars, detailLevel);
   }
 
   CompletenessResult isComplete(StringRef source) {
@@ -1070,8 +1142,9 @@ CompletionResult xmojo::InteractiveParser::complete(StringRef source,
 }
 
 InspectionResult xmojo::InteractiveParser::inspect(StringRef source,
-                                                   size_t cursorPosition) {
-  return impl->inspect(source, cursorPosition);
+                                                   size_t cursorPosition,
+                                                   unsigned detailLevel) {
+  return impl->inspect(source, cursorPosition, detailLevel);
 }
 
 CompletenessResult xmojo::InteractiveParser::isComplete(StringRef source) {

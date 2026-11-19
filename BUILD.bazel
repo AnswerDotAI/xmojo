@@ -13,6 +13,7 @@ load(
 )
 load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("@rules_cc//cc:cc_shared_library.bzl", "cc_shared_library")
 load("@rules_cc//cc:cc_test.bzl", "cc_test")
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
 
@@ -135,14 +136,23 @@ cc_test(
 )
 
 cc_library(
-    name = "mojo_interpreter",
-    srcs = ["src/kernel/MojoInterpreter.cpp"],
-    hdrs = ["src/kernel/MojoInterpreter.h"],
-    local_defines = ['XMOJO_VERSION=\\"%s\\"' % XMOJO_VERSION],
-    deps = [
-        ":interactive_session",
-        "@xmojo_deps//:xeus",
-    ],
+    name = "session_c",
+    srcs = ["src/capi/SessionC.cpp"],
+    hdrs = ["include/xmojo/SessionC.h"],
+    # noexcept needs exception tables to contain unexpected foreign unwinding.
+    copts = ["-fexceptions"],
+    strip_include_prefix = "include",
+    deps = [":interactive_session"],
+)
+
+cc_shared_library(
+    name = "session_c_shared",
+    shared_lib_name = select({
+        "@platforms//os:macos": "libxmojo_session.dylib",
+        "//conditions:default": "libxmojo_session.so",
+    }),
+    dynamic_deps = _NATIVE_DYNAMIC_DEPS,
+    deps = [":session_c"],
 )
 
 cc_binary(
@@ -150,6 +160,7 @@ cc_binary(
     srcs = [
         "src/CLI.h",
         "src/Kernel.cpp",
+        "src/Kernel.h",
         "src/REPL.cpp",
         "src/SessionOptionsCLI.h",
         "src/xmojo.cpp",
@@ -171,9 +182,9 @@ cc_binary(
     dynamic_deps = _NATIVE_DYNAMIC_DEPS,
     deps = [
         ":interactive_session",
-        ":mojo_interpreter",
+        ":session_c",
         "@//Mojo/tools/mojo:mojo_common",
-        "@xmojo_deps//:xeus_zmq",
+        "@xmojo_kernel//:kernel",
     ],
 )
 
@@ -230,8 +241,20 @@ copy_file(
 
 filegroup(
     name = "wheel_licenses",
-    srcs = [":wheel_license_MAX_LICENSE", ":wheel_license_Third-Party-Notices"],
+    srcs = [":wheel_license_MAX_LICENSE", ":wheel_license_Third-Party-Notices"] + [
+        ":wheel_license_" + name
+        for name in ["Rust-ThirdPartyNotices.txt", "Rust-COPYRIGHT-library.html"]
+    ],
 )
+
+[
+    copy_file(
+        name = "wheel_license_" + name,
+        src = "@xmojo_kernel//:" + name,
+        out = "python/xmojo/licenses/" + name,
+    )
+    for name in ["Rust-ThirdPartyNotices.txt", "Rust-COPYRIGHT-library.html"]
+]
 
 filegroup(
     name = "wheel_assets",
@@ -248,7 +271,10 @@ filegroup(
 
 cc_test(
     name = "session_test",
-    srcs = ["tests/session_test.cpp"],
+    srcs = [
+        "tests/session_c_test.cpp",
+        "tests/session_test.cpp",
+    ],
     data = [":stdlib_environment"],
     env = {
         "MODULAR_CRASH_REPORTING_ENABLED": "0",
@@ -260,27 +286,7 @@ cc_test(
     dynamic_deps = _NATIVE_DYNAMIC_DEPS,
     deps = [
         ":interactive_session",
-        "@llvm-project//third-party/unittest:gtest",
-    ] + select({
-        "@platforms//os:macos": ["@//bazel/internal:gtest_main_objc_pool_check"],
-        "//conditions:default": ["@llvm-project//third-party/unittest:gtest_main"],
-    }),
-)
-
-cc_test(
-    name = "interpreter_test",
-    srcs = ["tests/interpreter_test.cpp"],
-    data = [":stdlib_environment"],
-    env = {
-        "MODULAR_CRASH_REPORTING_ENABLED": "0",
-        "MODULAR_MOJO_MAX_IMPORT_PATH": "$(COMPUTED_IMPORT_PATH)",
-        "MODULAR_MOJO_MAX_COMPILERRT_PATH": "$(COMPILER_RT_PATH)",
-        "MODULAR_MOJO_MAX_SHARED_LIBS": "$(COMPUTED_LIBS)",
-    },
-    toolchains = [":stdlib_environment"],
-    dynamic_deps = _NATIVE_DYNAMIC_DEPS,
-    deps = [
-        ":mojo_interpreter",
+        ":session_c",
         "@llvm-project//third-party/unittest:gtest",
     ] + select({
         "@platforms//os:macos": ["@//bazel/internal:gtest_main_objc_pool_check"],

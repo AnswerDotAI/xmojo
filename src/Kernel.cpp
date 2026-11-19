@@ -5,40 +5,39 @@
 //===----------------------------------------------------------------------===//
 
 #include "CLI.h"
-#include "kernel/MojoInterpreter.h"
-
-#include "xeus-zmq/xserver_zmq.hpp"
-#include "xeus-zmq/xzmq_context.hpp"
-#include "xeus/xhelper.hpp"
-#include "xeus/xkernel.hpp"
-#include "xeus/xkernel_configuration.hpp"
+#include "Kernel.h"
 
 #include <iostream>
-#include <memory>
 #include <string>
-#include <utility>
+#include <vector>
 
 int xmojo::runKernel(int argc, char **argv, SessionOptions options) {
-  if (xeus::should_print_version(argc, argv)) {
-    std::cout << "xmojo " XMOJO_VERSION "\n";
-    return 0;
+  const char *connectionFile = nullptr;
+  for (int i = 1; i < argc; ++i) {
+    std::string argument = argv[i];
+    if (argument == "--version") {
+      std::cout << "xmojo " XMOJO_VERSION "\n";
+      return 0;
+    }
+    if (argument != "-f" || ++i == argc || connectionFile) {
+      std::cerr << "usage: xmojo kernel -f CONNECTION_FILE\n";
+      return 2;
+    }
+    connectionFile = argv[i];
   }
 
-  std::string connectionFile = xeus::extract_filename(argc, argv);
-  if (connectionFile.empty()) {
+  if (!connectionFile) {
     std::cerr << "usage: xmojo kernel -f CONNECTION_FILE\n";
     return 2;
   }
 
-  auto interpreterOr = MojoInterpreter::create(std::move(options));
-  if (interpreterOr.isError()) {
-    std::cerr << "xmojo: " << interpreterOr.getError() << '\n';
-    return 1;
-  }
-
-  xeus::xkernel kernel(xeus::load_configuration(connectionFile),
-                       xeus::get_user_name(), xeus::make_zmq_context(),
-                       interpreterOr.takeValue(), xeus::make_xserver_default);
-  kernel.start();
-  return 0;
+  std::vector<xmojo_string> importPaths;
+  for (const std::string &path : options.importPaths)
+    importPaths.push_back({path.data(), path.size()});
+  xmojo_session_options nativeOptions{};
+  nativeOptions.import_paths = importPaths.data();
+  nativeOptions.import_path_count = importPaths.size();
+  nativeOptions.target_accelerator = {options.targetAccelerator.data(),
+                                     options.targetAccelerator.size()};
+  return xmojo_run_kernel(connectionFile, &nativeOptions, XMOJO_VERSION);
 }
